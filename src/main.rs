@@ -4,15 +4,15 @@
 #![no_main]
 #![no_std]
 
-mod ir_timings;
-
 // Required for panic handler
 extern crate flipperzero_rt;
+mod ir_timings;
 
+use crate::ir_timings::{DUTY_CYCLE, FREQUENCY, POWER_BTN};
 use core::ffi::CStr;
-
-use flipperzero::notification::NotificationApp;
-use flipperzero::notification;
+use core::time::Duration;
+use flipperzero::furi::hal::rtc::datetime;
+use flipperzero::furi::thread::sleep;
 use flipperzero_rt::{entry, manifest};
 use flipperzero_sys::infrared_send_raw_ext;
 
@@ -27,11 +27,22 @@ manifest!(
 entry!(main);
 
 fn run() {
-    press_button(&ir_timings::POWER_BTN);
+    let mut has_run = false;
 
-    let mut app = NotificationApp::open();
+    loop {
+        sleep(Duration::from_mins(5));
 
-    app.notify(&notification::vibro::SINGLE_VIBRO);
+        let current_time = datetime();
+
+        if current_time.hour == 9 && !has_run {
+            press_button(&POWER_BTN);
+            has_run = true;
+        }
+
+        if current_time.hour != 22 && has_run {
+            has_run = false;
+        }
+    }
 }
 
 fn press_button(timings: &[u32]) {
@@ -40,8 +51,8 @@ fn press_button(timings: &[u32]) {
             timings.as_ptr(),
             timings.len() as u32,
             true,
-            38000,
-            0.330000,
+            FREQUENCY,
+            DUTY_CYCLE,
         );
     }
 }
