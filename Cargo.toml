@@ -1,0 +1,22 @@
+cargo-features = ["different-binary-name"]
+
+[package]
+name = "cold-zero"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[[bin]]
+name = "cold-zero"
+filename = "cold-zero.fap"
+bench = false
+test = false
+
+[dependencies]
+flipperzero = { version = "0.16.0" }
+flipperzero-sys = { version = "0.16.0" }
+flipperzero-rt = { version = "0.16.0" }
