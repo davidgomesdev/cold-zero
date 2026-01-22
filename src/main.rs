@@ -4,29 +4,50 @@
 #![no_main]
 #![no_std]
 
+mod ir_timings;
+
 // Required for panic handler
 extern crate flipperzero_rt;
 
 use core::ffi::CStr;
 
-use flipperzero::println;
+use flipperzero::notification::NotificationApp;
+use flipperzero::notification;
 use flipperzero_rt::{entry, manifest};
+use flipperzero_sys::infrared_send_raw_ext;
 
-// Define the FAP Manifest for this application
 manifest!(
-    name = "Flipper Zero Rust",
+    name = "ColdZero",
     app_version = 1,
     has_icon = true,
     // See https://github.com/flipperzero-rs/flipperzero/blob/v0.11.0/docs/icons.md for icon format
     icon = "rustacean-10x10.icon",
 );
 
-// Define the entry function
 entry!(main);
 
-// Entry point
+fn run() {
+    press_button(&ir_timings::POWER_BTN);
+
+    let mut app = NotificationApp::open();
+
+    app.notify(&notification::vibro::SINGLE_VIBRO);
+}
+
+fn press_button(timings: &[u32]) {
+    unsafe {
+        infrared_send_raw_ext(
+            timings.as_ptr(),
+            timings.len() as u32,
+            true,
+            38000,
+            0.330000,
+        );
+    }
+}
+
 fn main(_args: Option<&CStr>) -> i32 {
-    println!("Hello, Rust!");
+    run();
 
     0
 }
