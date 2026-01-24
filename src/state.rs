@@ -20,7 +20,7 @@ pub struct HeaterState {
 impl Default for HeaterState {
     fn default() -> Self {
         HeaterState {
-            temperature: 25,
+            temperature: 23,
             mode: HeaterMode::Eco,
             is_on: false,
         }
@@ -77,10 +77,11 @@ impl HeaterState {
         );
 
         let change_needed = (desired_temp - self.temperature) as i8;
-        let step = if change_needed > 0 { 1 } else { -1 };
-        let button = if step == 1 { &WARMER_BTN } else { &COOLER_BTN };
+        let button = if change_needed.is_positive() { &WARMER_BTN } else { &COOLER_BTN };
 
-        for _ in 0..change_needed.abs() {
+        // The +1 is because, for some reason, the first warm button press doesn't register
+        // (even with the remote)
+        for _ in 0..change_needed.abs()+1 {
             ir_press_button(button);
         }
 

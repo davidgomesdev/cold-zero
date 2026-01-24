@@ -114,7 +114,7 @@ fn run() {
 fn start_of_day_power_heater(app_state: &mut AppState, heater_state: &mut HeaterState) {
     heater_state.power_on();
     heater_state.change_mode(HeaterMode::HeatHigh);
-    heater_state.set_temp(35);
+    heater_state.set_temp(30);
 
     app_state.last_called_day = datetime().day;
 }
