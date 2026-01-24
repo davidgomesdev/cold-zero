@@ -9,27 +9,29 @@ extern crate alloc;
 extern crate flipperzero_rt;
 
 mod allocator;
-mod ir_timings;
+mod ir;
+mod state;
 
-use crate::ir_timings::{DUTY_CYCLE, FREQUENCY, POWER_BTN};
+use crate::state::{HeaterMode, HeaterState};
 use alloc::alloc::alloc;
 use alloc::boxed::Box;
 use alloc::format;
 use core::alloc::Layout;
 use core::ffi::{CStr, c_char, c_void};
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::Ordering;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero_rt::{entry, manifest};
 use flipperzero_sys::{
-    Canvas, FuriMessageQueue, FuriMutex, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui,
+    Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui,
     GuiLayerFullscreen, InputEvent, InputKeyBack, InputTypeRepeat, InputTypeShort,
     ViewPortOrientationHorizontal, canvas_draw_str, free, furi_message_queue_alloc,
     furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire,
     furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open,
-    gui_add_view_port, gui_remove_view_port, infrared_send_raw_ext, view_port_alloc,
-    view_port_draw_callback_set, view_port_enabled_set, view_port_free,
-    view_port_input_callback_set, view_port_set_orientation, view_port_update,
+    gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set,
+    view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation,
+    view_port_update,
 };
+use state::AppState;
 
 manifest!(
     name = "ColdZero",
@@ -42,11 +44,7 @@ manifest!(
 entry!(main);
 
 const RECORD_GUI: *const c_char = c"gui".as_ptr();
-
-struct AppState {
-    last_called_day: AtomicU8,
-    mutex: *mut FuriMutex,
-}
+const START_HOUR: u8 = 9;
 
 fn run() {
     unsafe {
@@ -54,6 +52,7 @@ fn run() {
         let view_port = view_port_alloc();
 
         let app_state = Box::into_raw(Box::new(AppState {
+            heater_state: HeaterState::default(),
             last_called_day: 0.into(),
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
         }));
@@ -76,11 +75,17 @@ fn run() {
             let last_called_day = (*app_state).last_called_day.load(Ordering::SeqCst);
             let time = datetime();
 
-            if time.hour >= 9 && last_called_day < time.day {
-                ir_press_button(&POWER_BTN);
-                (*app_state).last_called_day.fetch_add(1, Ordering::SeqCst);
+            if time.hour >= START_HOUR && last_called_day < time.day {
+                let heater_state = &mut (*app_state).heater_state;
+
+                start_of_day_power_heater(
+                    app_state.as_ref().expect("App state is null!"),
+                    heater_state,
+                );
+
                 view_port_update(view_port);
                 furi_mutex_release((*app_state).mutex);
+
                 continue;
             }
 
@@ -88,7 +93,9 @@ fn run() {
                 let input_event = *input_event;
 
                 if input_event.type_ == InputTypeShort || input_event.type_ == InputTypeRepeat {
-                    if input_event.key == InputKeyBack { running = false }
+                    if input_event.key == InputKeyBack {
+                        running = false
+                    }
                 }
 
                 view_port_update(view_port);
@@ -105,6 +112,14 @@ fn run() {
         furi_mutex_free((*app_state).mutex);
         free(app_state.cast());
     }
+}
+
+fn start_of_day_power_heater(app_state: &AppState, heater_state: &mut HeaterState) {
+    heater_state.power_on();
+    heater_state.change_mode(HeaterMode::HeatHigh);
+    heater_state.set_temp(35);
+
+    (*app_state).last_called_day.fetch_add(1, Ordering::SeqCst);
 }
 
 unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
@@ -141,18 +156,6 @@ unsafe extern "C" fn on_input(input: *mut InputEvent, context: *mut c_void) {
     unsafe {
         let queue: *mut FuriMessageQueue = context.cast();
         furi_message_queue_put(queue, input.cast(), FuriWaitForever.0);
-    }
-}
-
-fn ir_press_button(timings: &[u32]) {
-    unsafe {
-        infrared_send_raw_ext(
-            timings.as_ptr(),
-            timings.len() as u32,
-            true,
-            FREQUENCY,
-            DUTY_CYCLE,
-        );
     }
 }
 
