@@ -34,7 +34,7 @@ impl HeaterState {
 
         ir_press_button(&POWER_BTN);
 
-        self.temperature = 25;
+        self.temperature = 23;
         self.mode = HeaterMode::Eco;
         self.is_on = true;
     }
@@ -44,7 +44,7 @@ impl HeaterState {
 
         ir_press_button(&POWER_BTN);
 
-        self.temperature = 25;
+        self.temperature = 23;
         self.mode = HeaterMode::Eco;
         self.is_on = false;
     }
