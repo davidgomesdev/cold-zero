@@ -6,7 +6,7 @@ use flipperzero_sys::FuriMutex;
 use ufmt::derive::uDebug;
 
 pub struct AppState {
-    pub last_called_day: AtomicU8,
+    pub last_called_day: u8,
     pub heater_state: HeaterState,
     pub mutex: *mut FuriMutex,
 }
@@ -83,8 +83,9 @@ impl HeaterState {
 
         for _ in 0..change_needed.abs() {
             ir_press_button(button);
-            self.temperature = (self.temperature as i8 + step) as u8;
         }
+
+        self.temperature = desired_temp;
     }
 }
 

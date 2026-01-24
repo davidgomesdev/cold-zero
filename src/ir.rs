@@ -1,8 +1,10 @@
-use flipperzero_sys::infrared_send_raw_ext;
+use flipperzero::info;
+use flipperzero_sys::{infrared_send_raw, infrared_send_raw_ext};
 use self::timings::{DUTY_CYCLE, FREQUENCY};
 
 pub fn ir_press_button(timings: &[u32]) {
     unsafe {
+        info!("Sending button");
         infrared_send_raw_ext(
             timings.as_ptr(),
             timings.len() as u32,

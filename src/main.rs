@@ -17,19 +17,18 @@ use alloc::alloc::alloc;
 use alloc::boxed::Box;
 use alloc::format;
 use core::alloc::Layout;
-use core::ffi::{CStr, c_char, c_void};
-use core::sync::atomic::Ordering;
+use core::ffi::{c_char, c_void, CStr};
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero_rt::{entry, manifest};
 use flipperzero_sys::{
-    Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui,
-    GuiLayerFullscreen, InputEvent, InputKeyBack, InputTypeRepeat, InputTypeShort,
-    ViewPortOrientationHorizontal, canvas_draw_str, free, furi_message_queue_alloc,
-    furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire,
-    furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open,
-    gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set,
-    view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation,
-    view_port_update,
+    canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put,
+    furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close,
+    furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc,
+    view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set,
+    view_port_set_orientation, view_port_update, Canvas, FuriMessageQueue, FuriMutexTypeNormal,
+    FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen,
+    InputEvent, InputKeyBack, InputTypeRepeat, InputTypeShort,
+    ViewPortOrientationHorizontal,
 };
 use state::AppState;
 
@@ -72,14 +71,13 @@ fn run() {
         while running {
             furi_mutex_acquire((*app_state).mutex, FuriWaitForever.0);
 
-            let last_called_day = (*app_state).last_called_day.load(Ordering::SeqCst);
             let time = datetime();
 
-            if time.hour >= START_HOUR && last_called_day < time.day {
+            if time.hour >= START_HOUR && (*app_state).last_called_day < time.day {
                 let heater_state = &mut (*app_state).heater_state;
 
                 start_of_day_power_heater(
-                    app_state.as_ref().expect("App state is null!"),
+                    app_state.as_mut().expect("App state is null!"),
                     heater_state,
                 );
 
@@ -113,12 +111,12 @@ fn run() {
     }
 }
 
-fn start_of_day_power_heater(app_state: &AppState, heater_state: &mut HeaterState) {
+fn start_of_day_power_heater(app_state: &mut AppState, heater_state: &mut HeaterState) {
     heater_state.power_on();
     heater_state.change_mode(HeaterMode::HeatHigh);
     heater_state.set_temp(35);
 
-    app_state.last_called_day.fetch_add(1, Ordering::SeqCst);
+    app_state.last_called_day = datetime().day;
 }
 
 unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
@@ -126,9 +124,8 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
         let app_state: &AppState = &mut *(app_state as *mut AppState);
 
         canvas_draw_str(canvas, 0, 10, c"-- Cold Zero --".as_ptr());
-        let last_called_day = app_state.last_called_day.load(Ordering::SeqCst);
 
-        let text = if last_called_day == datetime().day {
+        let text = if app_state.last_called_day == datetime().day {
             c"Already ran today!"
         } else {
             c"Waiting to run..."
@@ -139,12 +136,25 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
         canvas_draw_str(
             canvas,
             0,
-            50,
+            60,
             format!(
                 "Current Time: {}:{}:{}",
                 datetime().hour,
                 datetime().minute,
                 datetime().second
+            )
+            .as_ptr(),
+        );
+
+        canvas_draw_str(
+            canvas,
+            0,
+            30,
+            format!(
+                "Heater state: {} {} {:?}",
+                if (app_state.heater_state.is_on) { "ON"} else { "OFF"},
+                app_state.heater_state.temperature,
+                app_state.heater_state.mode
             )
             .as_ptr(),
         );
