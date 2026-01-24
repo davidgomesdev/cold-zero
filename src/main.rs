@@ -92,11 +92,10 @@ fn run() {
             if furi_message_queue_get(queue, input_event.cast(), 100) == FuriStatusOk {
                 let input_event = *input_event;
 
-                if input_event.type_ == InputTypeShort || input_event.type_ == InputTypeRepeat {
-                    if input_event.key == InputKeyBack {
+                if (input_event.type_ == InputTypeShort || input_event.type_ == InputTypeRepeat)
+                    && input_event.key == InputKeyBack {
                         running = false
                     }
-                }
 
                 view_port_update(view_port);
             }
@@ -119,7 +118,7 @@ fn start_of_day_power_heater(app_state: &AppState, heater_state: &mut HeaterStat
     heater_state.change_mode(HeaterMode::HeatHigh);
     heater_state.set_temp(35);
 
-    (*app_state).last_called_day.fetch_add(1, Ordering::SeqCst);
+    app_state.last_called_day.fetch_add(1, Ordering::SeqCst);
 }
 
 unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {

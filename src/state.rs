@@ -1,9 +1,9 @@
 use crate::ir::ir_press_button;
 use crate::ir::timings::{COOLER_BTN, MODE_BTN, POWER_BTN, WARMER_BTN};
-use core::any::Any;
 use core::sync::atomic::AtomicU8;
-use flipperzero::{println, warn};
+use flipperzero::{info, warn};
 use flipperzero_sys::FuriMutex;
+use ufmt::derive::uDebug;
 
 pub struct AppState {
     pub last_called_day: AtomicU8,
@@ -30,6 +30,8 @@ impl Default for HeaterState {
 
 impl HeaterState {
     pub fn power_on(&mut self) {
+        info!("Powering on");
+
         ir_press_button(&POWER_BTN);
 
         self.temperature = 25;
@@ -37,7 +39,9 @@ impl HeaterState {
         self.is_on = true;
     }
 
-    pub fn power_off(&mut self) {
+    pub fn _power_off(&mut self) {
+        info!("Powering off");
+
         ir_press_button(&POWER_BTN);
 
         self.temperature = 25;
@@ -48,6 +52,8 @@ impl HeaterState {
     pub fn change_mode(&mut self, desired_mode: HeaterMode) {
         assert!(self.is_on, "The heater must be on!");
 
+        info!("Changing mode to {:?}", desired_mode);
+
         while self.mode != desired_mode {
             ir_press_button(&MODE_BTN);
             self.mode = self.mode.next();
@@ -55,13 +61,21 @@ impl HeaterState {
     }
 
     pub fn set_temp(&mut self, desired_temp: u8) {
-        assert!((5..=35).contains(&desired_temp), "Temperature must be between 5 and 35!");
+        assert!(
+            (5..=35).contains(&desired_temp),
+            "Temperature must be between 5 and 35!"
+        );
         assert!(self.is_on, "The heater must be on!");
 
         if self.temperature == desired_temp {
             warn!("Temperature already at the desired number");
             return;
         }
+
+        info!(
+            "Setting temp to {} (from {})",
+            desired_temp, self.temperature
+        );
 
         let change_needed = (desired_temp - self.temperature) as i8;
         let step = if change_needed > 0 { 1 } else { -1 };
@@ -74,11 +88,11 @@ impl HeaterState {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum HeaterMode {
     HeatLow = 0,
     HeatHigh,
-    Eco
+    Eco,
 }
 
 impl HeaterMode {
@@ -86,7 +100,7 @@ impl HeaterMode {
         match self {
             HeaterMode::HeatLow => HeaterMode::HeatHigh,
             HeaterMode::HeatHigh => HeaterMode::Eco,
-            HeaterMode::Eco => HeaterMode::HeatLow
+            HeaterMode::Eco => HeaterMode::HeatLow,
         }
     }
 }
