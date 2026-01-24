@@ -52,7 +52,7 @@ fn run() {
 
         let app_state = Box::into_raw(Box::new(AppState {
             heater_state: HeaterState::default(),
-            last_called_day: 0.into(),
+            last_called_day: 0,
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
         }));
 
@@ -152,7 +152,7 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
             30,
             format!(
                 "Heater state: {} {} {:?}",
-                if (app_state.heater_state.is_on) { "ON"} else { "OFF"},
+                if app_state.heater_state.is_on { "ON"} else { "OFF"},
                 app_state.heater_state.temperature,
                 app_state.heater_state.mode
             )

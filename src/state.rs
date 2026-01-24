@@ -1,6 +1,5 @@
 use crate::ir::ir_press_button;
 use crate::ir::timings::{COOLER_BTN, MODE_BTN, POWER_BTN, WARMER_BTN};
-use core::sync::atomic::AtomicU8;
 use flipperzero::{info, warn};
 use flipperzero_sys::FuriMutex;
 use ufmt::derive::uDebug;
