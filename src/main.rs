@@ -21,7 +21,16 @@ use core::ffi::{CStr, c_char, c_void};
 use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyOk, InputTypeRepeat, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update};
+use flipperzero_sys::{
+    Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui,
+    GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyOk, InputTypeLong, InputTypeShort,
+    ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, free, furi_message_queue_alloc,
+    furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire,
+    furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open,
+    gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set,
+    view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation,
+    view_port_update,
+};
 use state::AppState;
 
 manifest!(
@@ -77,9 +86,7 @@ fn run() {
                 && time.hour >= start_hour
                 && app_state.last_called_day < time.day
             {
-                start_of_day_power_heater(
-                    app_state,
-                );
+                start_of_day_power_heater(app_state);
 
                 view_port_update(view_port);
                 furi_mutex_release(app_state.mutex);
@@ -113,19 +120,11 @@ fn handle_key_presses(
     unsafe {
         let input_event = *input_event;
 
-        if !(input_event.type_ == InputTypeShort || input_event.type_ == InputTypeRepeat) {
-            return true;
-        }
-
         match input_event.key {
-            InputKeyBack => { return false; }
-            InputKeyOk => {
-                if app_state.heater_state.is_on {
-                    app_state.heater_state._power_off();
-                } else {
-                    start_of_day_power_heater(app_state);
-                }
+            InputKeyBack => {
+                return false;
             }
+            InputKeyOk => handle_ok_press(app_state, input_event),
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -134,6 +133,28 @@ fn handle_key_presses(
         view_port_update(view_port);
     }
     true
+}
+
+#[allow(non_upper_case_globals)]
+fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
+    if (input_event.type_ == InputTypeLong || input_event.type_ == InputTypeShort)
+        && app_state.heater_state.is_on
+    {
+        app_state.heater_state._power_off();
+        return;
+    }
+
+    match input_event.type_ {
+        InputTypeShort => {
+            app_state.heater_state.power_on();
+        }
+        InputTypeLong => {
+            start_of_day_power_heater(app_state);
+        }
+        _ => {
+            debug!("OK button press type not handled ({})", input_event.type_.0);
+        }
+    }
 }
 
 fn start_of_day_power_heater(app_state: &mut AppState) {
