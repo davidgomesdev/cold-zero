@@ -7,8 +7,10 @@ extern crate flipperzero_rt;
 
 mod allocator;
 mod ir;
+mod notification;
 mod state;
 
+use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
 use crate::state::{HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
@@ -17,8 +19,18 @@ use core::alloc::Layout;
 use core::ffi::{c_char, c_void, CStr};
 use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
+use flipperzero::notification::NotificationApp;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyOk, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal};
+use flipperzero_sys::{
+    canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put,
+    furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open,
+    gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set,
+    view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update,
+    Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever,
+    Gui, GuiLayerFullscreen, InputEvent, InputKeyBack,
+    InputKeyOk, InputTypeLong, InputTypeShort, ViewPort,
+    ViewPortOrientationHorizontal,
+};
 use state::AppState;
 
 manifest!(
@@ -40,6 +52,7 @@ fn run() {
     unsafe {
         let queue = furi_message_queue_alloc(8, size_of::<InputEvent>() as u32);
         let view_port = view_port_alloc();
+        let mut notification_app = NotificationApp::open();
 
         let app_state = Box::into_raw(Box::new(AppState {
             heater_state: HeaterState::default(),
@@ -72,20 +85,26 @@ fn run() {
             };
             let app_state = app_state.as_mut().expect("App state is null!");
 
-            if time.hour < END_OF_START_HOUR
-                && time.hour >= start_hour
-                && app_state.last_called_day < time.day
-            {
-                start_of_day_power_heater(app_state);
+            if app_state.last_called_day < time.day {
+                if time.hour < END_OF_START_HOUR && time.hour >= start_hour {
+                    start_of_day_power_heater(&mut notification_app, app_state);
 
-                view_port_update(view_port);
-                furi_mutex_release(app_state.mutex);
+                    app_state.run_state = RunState::SetDaytimeHeat;
+                    view_port_update(view_port);
+                    furi_mutex_release(app_state.mutex);
 
-                continue;
+                    continue;
+                }
+
+                if app_state.run_state != RunState::WaitingForDaytime {
+                    app_state.run_state = RunState::WaitingForDaytime;
+                    view_port_update(view_port);
+                }
             }
 
             if furi_message_queue_get(queue, input_event.cast(), 100) == FuriStatusOk {
-                running = handle_key_presses(view_port, input_event, app_state);
+                running =
+                    handle_key_presses(&mut notification_app, view_port, input_event, app_state);
             }
 
             furi_mutex_release(app_state.mutex);
@@ -104,6 +123,7 @@ fn run() {
 
 #[allow(non_upper_case_globals)]
 fn handle_key_presses(
+    notification_app: &mut NotificationApp,
     view_port: *mut ViewPort,
     input_event: *mut InputEvent,
     app_state: &mut AppState,
@@ -116,7 +136,7 @@ fn handle_key_presses(
             InputKeyBack => {
                 return false;
             }
-            InputKeyOk => handle_ok_press(app_state, input_event),
+            InputKeyOk => handle_ok_press(notification_app, app_state, input_event),
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -128,23 +148,27 @@ fn handle_key_presses(
 }
 
 #[allow(non_upper_case_globals)]
-fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
+fn handle_ok_press(
+    notification_app: &mut NotificationApp,
+    app_state: &mut AppState,
+    input_event: InputEvent,
+) {
     if (input_event.type_ == InputTypeLong || input_event.type_ == InputTypeShort)
         && app_state.heater_state.is_on
     {
         app_state.heater_state.power_off();
-        app_state.run_state = RunState::WaitingForDaytime;
+        notification_app.notify(&MANUAL_POWER_OFF);
+
         return;
     }
 
     match input_event.type_ {
         InputTypeShort => {
             app_state.heater_state.power_on();
+            notification_app.notify(&MANUAL_POWER_ON);
         }
         InputTypeLong => {
-            start_of_day_power_heater(app_state);
-            app_state.run_state = RunState::SetDaytimeHeat;
-            return;
+            start_of_day_power_heater(notification_app, app_state);
         }
         _ => {
             debug!(
@@ -157,7 +181,7 @@ fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
     app_state.run_state = RunState::WaitingForDaytime;
 }
 
-fn start_of_day_power_heater(app_state: &mut AppState) {
+fn start_of_day_power_heater(notification_app: &mut NotificationApp, app_state: &mut AppState) {
     let heater_state = &mut app_state.heater_state;
 
     heater_state.power_on();
@@ -165,6 +189,7 @@ fn start_of_day_power_heater(app_state: &mut AppState) {
     heater_state.set_temp(35);
 
     app_state.last_called_day = datetime().day;
+    notification_app.notify(&DAYTIME_CHANGE);
 }
 
 unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {

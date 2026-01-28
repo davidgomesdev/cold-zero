@@ -11,6 +11,7 @@ pub struct AppState {
     pub mutex: *mut FuriMutex,
 }
 
+#[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum RunState {
     WaitingForDaytime,
     Changing,
