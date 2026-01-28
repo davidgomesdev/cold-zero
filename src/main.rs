@@ -1,6 +1,3 @@
-//! Template project for Flipper Zero.
-//! This app prints "Hello, Rust!" to the console then exits.
-
 #![no_main]
 #![no_std]
 
@@ -140,7 +137,7 @@ fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
     if (input_event.type_ == InputTypeLong || input_event.type_ == InputTypeShort)
         && app_state.heater_state.is_on
     {
-        app_state.heater_state._power_off();
+        app_state.heater_state.power_off();
         return;
     }
 
@@ -169,7 +166,7 @@ fn start_of_day_power_heater(app_state: &mut AppState) {
 
 unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
     unsafe {
-        let app_state: &AppState = &mut *(app_state as *mut AppState);
+        let app_state: &mut AppState = &mut *(app_state as *mut AppState);
 
         canvas_draw_str(canvas, 0, 10, c"-- Cold Zero --".as_ptr());
 

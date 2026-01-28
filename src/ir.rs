@@ -16,7 +16,9 @@ pub fn ir_press_button(timings: &[u32]) {
 }
 
 pub mod timings {
+    /// IR carrier frequency in Hz
     pub const FREQUENCY: u32 = 38000;
+    /// PWM duty cycle (0.0-1.0)
     pub const DUTY_CYCLE: f32 = 0.33;
 
     pub const POWER_BTN: [u32; 99] = [

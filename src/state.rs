@@ -11,7 +11,7 @@ pub struct AppState {
 }
 
 pub struct HeaterState {
-    // Max 35 min 5
+    /// Temperature range: 5°C (min) to 35°C (max)
     pub temperature: u8,
     pub mode: HeaterMode,
     pub is_on: bool,
@@ -38,7 +38,7 @@ impl HeaterState {
         self.is_on = true;
     }
 
-    pub fn _power_off(&mut self) {
+    pub fn power_off(&mut self) {
         info!("Powering off");
 
         ir_press_button(&POWER_BTN);
@@ -76,12 +76,16 @@ impl HeaterState {
             desired_temp, self.temperature
         );
 
-        let change_needed = (desired_temp - self.temperature) as i8;
-        let button = if change_needed.is_positive() { &WARMER_BTN } else { &COOLER_BTN };
+        let change_needed = desired_temp as i8 - self.temperature as i8;
+        let button = if change_needed.is_positive() {
+            &WARMER_BTN
+        } else {
+            &COOLER_BTN
+        };
 
         // The +1 is because, for some reason, the first warm button press doesn't register
         // (even with the remote)
-        for _ in 0..change_needed.abs()+1 {
+        for _ in 0..change_needed.abs() + 1 {
             ir_press_button(button);
         }
 
