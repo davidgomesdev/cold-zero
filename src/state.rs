@@ -7,7 +7,14 @@ use ufmt::derive::uDebug;
 pub struct AppState {
     pub last_called_day: u8,
     pub heater_state: HeaterState,
+    pub run_state: RunState,
     pub mutex: *mut FuriMutex,
+}
+
+pub enum RunState {
+    WaitingForDaytime,
+    Changing,
+    SetDaytimeHeat,
 }
 
 pub struct HeaterState {

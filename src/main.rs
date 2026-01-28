@@ -9,25 +9,16 @@ mod allocator;
 mod ir;
 mod state;
 
-use crate::state::{HeaterMode, HeaterState};
+use crate::state::{HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
 use alloc::format;
 use core::alloc::Layout;
-use core::ffi::{CStr, c_char, c_void};
+use core::ffi::{c_char, c_void, CStr};
 use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{
-    Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui,
-    GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyOk, InputTypeLong, InputTypeShort,
-    ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, free, furi_message_queue_alloc,
-    furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire,
-    furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open,
-    gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set,
-    view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation,
-    view_port_update,
-};
+use flipperzero_sys::{canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyOk, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal};
 use state::AppState;
 
 manifest!(
@@ -52,6 +43,7 @@ fn run() {
 
         let app_state = Box::into_raw(Box::new(AppState {
             heater_state: HeaterState::default(),
+            run_state: RunState::WaitingForDaytime,
             last_called_day: 0,
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
         }));
@@ -117,6 +109,7 @@ fn handle_key_presses(
     app_state: &mut AppState,
 ) -> bool {
     unsafe {
+        app_state.run_state = RunState::Changing;
         let input_event = *input_event;
 
         match input_event.key {
@@ -140,6 +133,7 @@ fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
         && app_state.heater_state.is_on
     {
         app_state.heater_state.power_off();
+        app_state.run_state = RunState::WaitingForDaytime;
         return;
     }
 
@@ -149,6 +143,8 @@ fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
         }
         InputTypeLong => {
             start_of_day_power_heater(app_state);
+            app_state.run_state = RunState::SetDaytimeHeat;
+            return;
         }
         _ => {
             debug!(
@@ -157,6 +153,8 @@ fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
             );
         }
     }
+
+    app_state.run_state = RunState::WaitingForDaytime;
 }
 
 fn start_of_day_power_heater(app_state: &mut AppState) {
@@ -175,10 +173,10 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
 
         canvas_draw_str(canvas, 0, 10, c"-- Cold Zero --".as_ptr());
 
-        let text = if app_state.last_called_day == datetime().day {
-            c"Already ran today!"
-        } else {
-            c"Waiting to run..."
+        let text = match app_state.run_state {
+            RunState::WaitingForDaytime => c"Waiting for daytime...",
+            RunState::Changing => c"Changing heater state...",
+            RunState::SetDaytimeHeat => c"Heater set for daytime!",
         };
 
         canvas_draw_str(canvas, 0, 20, text.as_ptr());
