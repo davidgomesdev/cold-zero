@@ -10,7 +10,7 @@ mod ir;
 mod state;
 
 use crate::state::{HeaterMode, HeaterState};
-use alloc::alloc::alloc;
+use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
 use alloc::format;
 use core::alloc::Layout;
@@ -64,7 +64,8 @@ fn run() {
 
         gui_add_view_port(gui, view_port, GuiLayerFullscreen);
 
-        let input_event: *mut InputEvent = alloc(Layout::new::<InputEvent>()).cast();
+        let input_event_layout = Layout::new::<InputEvent>();
+        let input_event: *mut InputEvent = alloc(input_event_layout).cast();
 
         let mut running = true;
 
@@ -98,6 +99,7 @@ fn run() {
             furi_mutex_release(app_state.mutex);
         }
 
+        dealloc(input_event as *mut u8, input_event_layout);
         view_port_enabled_set(view_port, false);
         furi_message_queue_free(queue);
         gui_remove_view_port(gui, view_port);
@@ -149,7 +151,10 @@ fn handle_ok_press(app_state: &mut AppState, input_event: InputEvent) {
             start_of_day_power_heater(app_state);
         }
         _ => {
-            debug!("OK button press type not handled ({})", input_event.type_.0);
+            debug!(
+                "Received OK button press type not handled ({})",
+                input_event.type_.0
+            );
         }
     }
 }
@@ -178,35 +183,27 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
 
         canvas_draw_str(canvas, 0, 20, text.as_ptr());
 
-        canvas_draw_str(
-            canvas,
-            0,
-            60,
-            format!(
-                "Current Time: {}:{}:{}",
-                datetime().hour,
-                datetime().minute,
-                datetime().second
-            )
-            .as_ptr(),
+        let time_str = format!(
+            "Current Time: {}:{}:{}",
+            datetime().hour,
+            datetime().minute,
+            datetime().second
         );
 
-        canvas_draw_str(
-            canvas,
-            0,
-            30,
-            format!(
-                "Heater state: {} {} {:?}",
-                if app_state.heater_state.is_on {
-                    "ON"
-                } else {
-                    "OFF"
-                },
-                app_state.heater_state.temperature,
-                app_state.heater_state.mode
-            )
-            .as_ptr(),
+        canvas_draw_str(canvas, 0, 60, time_str.as_ptr());
+
+        let heater_state_str = format!(
+            "Heater state: {} {} {:?}",
+            if app_state.heater_state.is_on {
+                "ON"
+            } else {
+                "OFF"
+            },
+            app_state.heater_state.temperature,
+            app_state.heater_state.mode
         );
+
+        canvas_draw_str(canvas, 0, 30, heater_state_str.as_ptr());
     }
 }
 
