@@ -154,7 +154,6 @@ fn handle_key_presses(
     true
 }
 
-#[allow(non_upper_case_globals)]
 fn handle_ok_press(
     notification_app: &mut NotificationApp,
     app_state: &mut AppState,
