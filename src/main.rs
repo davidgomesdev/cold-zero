@@ -12,7 +12,7 @@ mod notification;
 mod state;
 
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
-use crate::fan::{FanLight, FanState};
+use crate::fan::{FanLight, FanMode, FanState};
 use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
@@ -269,9 +269,9 @@ unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
     canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
 
     let hints = if app_state.heater_state.is_on {
-        c"OK:off Hold:off <>:sw".as_ptr()
+        c"OK:off Hold:off".as_ptr()
     } else {
-        c"OK:on Hold:day <>:sw".as_ptr()
+        c"OK:on Hold:day".as_ptr()
     };
     canvas_draw_str(canvas, 0, 60, hints);
 }
@@ -292,18 +292,24 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
             FanLight::Partial => "Part",
             FanLight::Off => "Off",
         };
+        let mode_str = match app_state.fan_state.fan_mode {
+            FanMode::F1 => "F1",
+            FanMode::F2 => "F2",
+            FanMode::F3 => "F3",
+            FanMode::Sleep => "Slp",
+            FanMode::Nature => "Nat",
+        };
         let fan_detail = format!(
-            "Light:{} Timer:{}h F2",
-            light_str,
+            "Light:{light_str} Timer:{}h {mode_str}\0",
             app_state.fan_state.timer,
         );
         canvas_draw_str(canvas, 0, 30, fan_detail.as_ptr());
     } else {
-        canvas_draw_str(canvas, 0, 30, c"Light:- Timer:- F2".as_ptr());
+        canvas_draw_str(canvas, 0, 30, c"".as_ptr());
     }
 
     let time_str = format!(
-        "{}:{}:{}",
+        "{}:{:02}:{:02}\0",
         datetime().hour,
         datetime().minute,
         datetime().second,
@@ -311,9 +317,9 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
     canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
 
     let hints = if app_state.fan_state.is_on {
-        c"OK:off  <>:switch".as_ptr()
+        c"OK:off".as_ptr()
     } else {
-        c"OK:on  <>:switch".as_ptr()
+        c"OK:on".as_ptr()
     };
     canvas_draw_str(canvas, 0, 60, hints);
 }
