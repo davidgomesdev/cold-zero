@@ -67,10 +67,52 @@ pub mod fan {
     pub const FREQUENCY: u32 = 38000;
     pub const DUTY_CYCLE: f32 = 0.33;
 
-    /// Mock — replace with pulse array captured from the real remote
-    pub const POWER_BTN: [u32; 1] = [0];
-    /// Mock — replace with pulse array captured from the real remote
-    pub const TIMER_BTN: [u32; 1] = [0];
-    /// Mock — replace with pulse array captured from the real remote
-    pub const LIGHT_BTN: [u32; 1] = [0];
+    // NEC protocol: address 0x80, LSB-first encoding
+    // Header: 9000µs mark, 4500µs space
+    // Bit 0: 537µs mark + 572µs space
+    // Bit 1: 537µs mark + 1702µs space
+    // Stop: 537µs mark
+    // Frame: address(0x80) + ~address(0x7F) + command + ~command
+
+    // command 0x1E
+    pub const POWER_BTN: [u32; 67] = [
+        9000, 4500,
+        // address 0x80 LSB-first: 0,0,0,0,0,0,0,1
+        537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 1702,
+        // ~address 0x7F LSB-first: 1,1,1,1,1,1,1,0
+        537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 572,
+        // command 0x1E LSB-first: 0,1,1,1,1,0,0,0
+        537, 572, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 572, 537, 572, 537, 572,
+        // ~command 0xE1 LSB-first: 1,0,0,0,0,1,1,1
+        537, 1702, 537, 572, 537, 572, 537, 572, 537, 572, 537, 1702, 537, 1702, 537, 1702,
+        537,
+    ];
+
+    // command 0x06
+    pub const TIMER_BTN: [u32; 67] = [
+        9000, 4500,
+        // address 0x80 LSB-first: 0,0,0,0,0,0,0,1
+        537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 1702,
+        // ~address 0x7F LSB-first: 1,1,1,1,1,1,1,0
+        537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 572,
+        // command 0x06 LSB-first: 0,1,1,0,0,0,0,0
+        537, 572, 537, 1702, 537, 1702, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572,
+        // ~command 0xF9 LSB-first: 1,0,0,1,1,1,1,1
+        537, 1702, 537, 572, 537, 572, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702,
+        537,
+    ];
+
+    // command 0x12
+    pub const LIGHT_BTN: [u32; 67] = [
+        9000, 4500,
+        // address 0x80 LSB-first: 0,0,0,0,0,0,0,1
+        537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 1702,
+        // ~address 0x7F LSB-first: 1,1,1,1,1,1,1,0
+        537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 572,
+        // command 0x12 LSB-first: 0,1,0,0,1,0,0,0
+        537, 572, 537, 1702, 537, 572, 537, 572, 537, 1702, 537, 572, 537, 572, 537, 572,
+        // ~command 0xED LSB-first: 1,0,1,1,0,1,1,1
+        537, 1702, 537, 572, 537, 1702, 537, 1702, 537, 572, 537, 1702, 537, 1702, 537, 1702,
+        537,
+    ];
 }
