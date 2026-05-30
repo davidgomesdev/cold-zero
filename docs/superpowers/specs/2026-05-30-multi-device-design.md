@@ -29,23 +29,26 @@ Defaults: `is_on: false`, `timer: 0`, `light: Full`, `fan_mode: F2`.
 
 ### `src/state.rs` (modified)
 
-Add `ActiveDevice` enum, replace `heater_state: HeaterState` in `AppState`:
+Add `ActiveDevice` discriminant enum and `fan_state` field to `AppState`. Both device states live side-by-side so switching preserves each device's in-memory state:
 
 ```rust
+#[derive(PartialEq, Eq)]
 pub enum ActiveDevice {
-    Heater(HeaterState),
-    Fan(FanState),
+    Heater,
+    Fan,
 }
 
 pub struct AppState {
-    pub active_device: ActiveDevice,  // replaces heater_state
+    pub heater_state: HeaterState,
+    pub fan_state: FanState,
+    pub active_device: ActiveDevice,
     pub run_state: RunState,
     pub last_daytime_run_day: u8,
     pub mutex: *mut FuriMutex,
 }
 ```
 
-Default: `active_device: ActiveDevice::Heater(HeaterState::default())`.
+Default: `active_device: ActiveDevice::Heater`, `heater_state: HeaterState::default()`, `fan_state: FanState::default()`.
 
 `run_state` remains a top-level `AppState` field and is **heater-only** — the draw callback ignores it when `active_device` is `Fan`, and the daytime loop skips it entirely when Fan is active. Switching devices does not reset `run_state`; the main loop will update it correctly on the next tick once Heater is active again.
 
@@ -82,7 +85,7 @@ State after: all fields reset to defaults.
 
 Switching devices keeps each device's in-memory state intact for the session.
 
-The daytime auto-trigger in the main loop (`start_of_day_power_heater`) only fires when `active_device` is `ActiveDevice::Heater(_)`.
+The daytime auto-trigger in the main loop (`start_of_day_power_heater`) only fires when `active_device == ActiveDevice::Heater`.
 
 ---
 
@@ -152,6 +155,6 @@ pub mod fan {
 | File | Change |
 |---|---|
 | `src/fan.rs` | New — `FanState`, `FanLight`, `FanMode`, `power_on`, `power_off` |
-| `src/state.rs` | Add `ActiveDevice` enum; replace `heater_state` field in `AppState` |
+| `src/state.rs` | Add `ActiveDevice` enum; add `fan_state` and `active_device` to `AppState` |
 | `src/ir.rs` | Add `fan` submodule with mock timings |
 | `src/main.rs` | Left/Right cycling, OK/long-OK dispatch per device, draw per device, hints bar |
