@@ -47,6 +47,8 @@ pub struct AppState {
 
 Default: `active_device: ActiveDevice::Heater(HeaterState::default())`.
 
+`run_state` remains a top-level `AppState` field and is **heater-only** — the draw callback ignores it when `active_device` is `Fan`, and the daytime loop skips it entirely when Fan is active. Switching devices does not reset `run_state`; the main loop will update it correctly on the next tick once Heater is active again.
+
 ---
 
 ## Fan Power Sequence
