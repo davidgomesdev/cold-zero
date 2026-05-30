@@ -12,7 +12,7 @@ mod notification;
 mod state;
 
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
-use crate::fan::FanState;
+use crate::fan::{FanLight, FanState};
 use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
@@ -238,89 +238,84 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
 }
 
 unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
-    unsafe {
-        canvas_draw_str(canvas, 0, 10, c"< Heater >".as_ptr());
+    canvas_draw_str(canvas, 0, 10, c"< Heater >".as_ptr());
 
-        let status = match app_state.run_state {
-            RunState::WaitingForDaytime => c"Waiting for daytime...".as_ptr(),
-            RunState::Changing => c"Changing heater state...".as_ptr(),
-            RunState::SetDaytimeHeat => c"Heater set for daytime!".as_ptr(),
-        };
-        canvas_draw_str(canvas, 0, 20, status);
+    let status = match app_state.run_state {
+        RunState::WaitingForDaytime => c"Waiting for daytime...".as_ptr(),
+        RunState::Changing => c"Changing heater state...".as_ptr(),
+        RunState::SetDaytimeHeat => c"Heater set for daytime!".as_ptr(),
+    };
+    canvas_draw_str(canvas, 0, 20, status);
 
-        let mode_str = match app_state.heater_state.mode {
-            HeaterMode::HeatLow => "HeatLow",
-            HeaterMode::HeatHigh => "HeatHigh",
-            HeaterMode::Eco => "Eco",
-        };
-        let heater_str = format!(
-            "Heater: {} {}C {}",
-            if app_state.heater_state.is_on { "ON" } else { "OFF" },
-            app_state.heater_state.temperature,
-            mode_str,
-        );
-        canvas_draw_str(canvas, 0, 30, heater_str.as_ptr());
+    let mode_str = match app_state.heater_state.mode {
+        HeaterMode::HeatLow => "HeatLow",
+        HeaterMode::HeatHigh => "HeatHigh",
+        HeaterMode::Eco => "Eco",
+    };
+    let heater_str = format!(
+        "Heater: {} {}C {}",
+        if app_state.heater_state.is_on { "ON" } else { "OFF" },
+        app_state.heater_state.temperature,
+        mode_str,
+    );
+    canvas_draw_str(canvas, 0, 30, heater_str.as_ptr());
 
-        let time_str = format!(
-            "{}:{}:{}",
-            datetime().hour,
-            datetime().minute,
-            datetime().second,
-        );
-        canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
+    let time_str = format!(
+        "{}:{}:{}",
+        datetime().hour,
+        datetime().minute,
+        datetime().second,
+    );
+    canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
 
-        let hints = if app_state.heater_state.is_on {
-            c"OK:off Hold:off <>:sw".as_ptr()
-        } else {
-            c"OK:on Hold:day <>:sw".as_ptr()
-        };
-        canvas_draw_str(canvas, 0, 60, hints);
-    }
+    let hints = if app_state.heater_state.is_on {
+        c"OK:off Hold:off <>:sw".as_ptr()
+    } else {
+        c"OK:on Hold:day <>:sw".as_ptr()
+    };
+    canvas_draw_str(canvas, 0, 60, hints);
 }
 
 unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
-    use crate::fan::FanLight;
-    unsafe {
-        canvas_draw_str(canvas, 0, 10, c"< Fan >".as_ptr());
+    canvas_draw_str(canvas, 0, 10, c"< Fan >".as_ptr());
 
-        let on_str = if app_state.fan_state.is_on {
-            c"Fan: ON".as_ptr()
-        } else {
-            c"Fan: OFF".as_ptr()
+    let on_str = if app_state.fan_state.is_on {
+        c"Fan: ON".as_ptr()
+    } else {
+        c"Fan: OFF".as_ptr()
+    };
+    canvas_draw_str(canvas, 0, 20, on_str);
+
+    if app_state.fan_state.is_on {
+        let light_str = match app_state.fan_state.light {
+            FanLight::Full => "Full",
+            FanLight::Partial => "Part",
+            FanLight::Off => "Off",
         };
-        canvas_draw_str(canvas, 0, 20, on_str);
-
-        if app_state.fan_state.is_on {
-            let light_str = match app_state.fan_state.light {
-                FanLight::Full => "Full",
-                FanLight::Partial => "Part",
-                FanLight::Off => "Off",
-            };
-            let fan_detail = format!(
-                "Light:{} Timer:{}h F2",
-                light_str,
-                app_state.fan_state.timer,
-            );
-            canvas_draw_str(canvas, 0, 30, fan_detail.as_ptr());
-        } else {
-            canvas_draw_str(canvas, 0, 30, c"Light:- Timer:- F2".as_ptr());
-        }
-
-        let time_str = format!(
-            "{}:{}:{}",
-            datetime().hour,
-            datetime().minute,
-            datetime().second,
+        let fan_detail = format!(
+            "Light:{} Timer:{}h F2",
+            light_str,
+            app_state.fan_state.timer,
         );
-        canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
-
-        let hints = if app_state.fan_state.is_on {
-            c"OK:off  <>:switch".as_ptr()
-        } else {
-            c"OK:on  <>:switch".as_ptr()
-        };
-        canvas_draw_str(canvas, 0, 60, hints);
+        canvas_draw_str(canvas, 0, 30, fan_detail.as_ptr());
+    } else {
+        canvas_draw_str(canvas, 0, 30, c"Light:- Timer:- F2".as_ptr());
     }
+
+    let time_str = format!(
+        "{}:{}:{}",
+        datetime().hour,
+        datetime().minute,
+        datetime().second,
+    );
+    canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
+
+    let hints = if app_state.fan_state.is_on {
+        c"OK:off  <>:switch".as_ptr()
+    } else {
+        c"OK:on  <>:switch".as_ptr()
+    };
+    canvas_draw_str(canvas, 0, 60, hints);
 }
 
 unsafe extern "C" fn on_input(input: *mut InputEvent, context: *mut c_void) {
