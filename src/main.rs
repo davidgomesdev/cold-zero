@@ -17,22 +17,14 @@ use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
 use alloc::format;
+use alloc::string::String;
 use core::alloc::Layout;
 use core::ffi::{c_char, c_void, CStr};
 use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{
-    canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put,
-    furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open,
-    gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set,
-    view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update,
-    Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever,
-    Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyLeft, InputKeyRight,
-    InputKeyOk, InputTypeLong, InputTypeShort, ViewPort,
-    ViewPortOrientationHorizontal,
-};
+use flipperzero_sys::{canvas_draw_str, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyLeft, InputKeyRight, InputKeyOk, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str_aligned, AlignRight, AlignBottom};
 use state::AppState;
 
 manifest!(
@@ -46,6 +38,8 @@ manifest!(
 entry!(main);
 
 const RECORD_GUI: *const c_char = c"gui".as_ptr();
+const SCREEN_WIDTH: i32 = 127;
+const SCREEN_HEIGHT: i32 = 63;
 const START_HOUR_WEEKDAYS: u8 = 8;
 const START_HOUR_WEEKENDS: u8 = 9;
 const END_OF_START_HOUR: u8 = 13;
@@ -238,7 +232,7 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
 }
 
 unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
-    canvas_draw_str(canvas, 0, 10, c"< Heater >".as_ptr());
+    draw_header(canvas, app_state);
 
     let status = match app_state.run_state {
         RunState::WaitingForDaytime => c"Waiting for daytime...".as_ptr(),
@@ -253,31 +247,34 @@ unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
         HeaterMode::Eco => "Eco",
     };
     let heater_str = format!(
-        "Heater: {} {}C {}",
+        "Power: {} {}C {}",
         if app_state.heater_state.is_on { "ON" } else { "OFF" },
         app_state.heater_state.temperature,
         mode_str,
     );
     canvas_draw_str(canvas, 0, 30, heater_str.as_ptr());
 
-    let time_str = format!(
-        "{}:{}:{}",
-        datetime().hour,
-        datetime().minute,
-        datetime().second,
-    );
+    let time_str = get_time_label();
     canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
 
     let hints = if app_state.heater_state.is_on {
-        c"OK:off Hold:off".as_ptr()
+        c"OK:off".as_ptr()
     } else {
         c"OK:on Hold:day".as_ptr()
     };
-    canvas_draw_str(canvas, 0, 60, hints);
+    draw_hints(canvas, hints);
+}
+
+unsafe fn draw_header(canvas: *mut Canvas, app_state: &AppState) {
+    let active_device_label = match app_state.active_device {
+        ActiveDevice::Heater => c"< Heater >".as_ptr(),
+        ActiveDevice::Fan => c"< Fan >".as_ptr(),
+    };
+    canvas_draw_str(canvas, 0, 10, active_device_label);
 }
 
 unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
-    canvas_draw_str(canvas, 0, 10, c"< Fan >".as_ptr());
+    draw_header(canvas, app_state);
 
     let on_str = if app_state.fan_state.is_on {
         c"Fan: ON".as_ptr()
@@ -308,20 +305,29 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
         canvas_draw_str(canvas, 0, 30, c"".as_ptr());
     }
 
-    let time_str = format!(
-        "{}:{:02}:{:02}\0",
-        datetime().hour,
-        datetime().minute,
-        datetime().second,
-    );
-    canvas_draw_str(canvas, 0, 48, time_str.as_ptr());
+    canvas_draw_str(canvas, 0, 48, get_time_label().as_ptr());
 
     let hints = if app_state.fan_state.is_on {
         c"OK:off".as_ptr()
     } else {
         c"OK:on".as_ptr()
     };
-    canvas_draw_str(canvas, 0, 60, hints);
+    draw_hints(canvas, hints);
+}
+
+unsafe fn draw_hints(canvas: *mut Canvas, hints: *const c_char) {
+    canvas_draw_str_aligned(canvas, SCREEN_WIDTH, SCREEN_HEIGHT, AlignRight, AlignBottom, hints);
+}
+
+fn get_time_label() -> String {
+    let time = datetime();
+
+    format!(
+        "{}:{}:{}",
+        time.hour,
+        time.minute,
+        time.second,
+    )
 }
 
 unsafe extern "C" fn on_input(input: *mut InputEvent, context: *mut c_void) {
