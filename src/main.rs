@@ -6,6 +6,7 @@ extern crate alloc;
 extern crate flipperzero_rt;
 
 mod allocator;
+mod fan;
 mod ir;
 mod notification;
 mod state;
@@ -57,7 +58,7 @@ fn run() {
         let app_state = Box::into_raw(Box::new(AppState {
             heater_state: HeaterState::default(),
             run_state: RunState::WaitingForDaytime,
-            last_called_day: 0,
+            last_daytime_run_day: 0,
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
         }));
 
@@ -85,7 +86,7 @@ fn run() {
             };
             let app_state = app_state.as_mut().expect("App state is null!");
 
-            if app_state.last_called_day < time.day {
+            if app_state.last_daytime_run_day < time.day {
                 if time.hour < END_OF_START_HOUR && time.hour >= start_hour {
                     start_of_day_power_heater(&mut notification_app, app_state);
 
@@ -188,7 +189,7 @@ fn start_of_day_power_heater(notification_app: &mut NotificationApp, app_state: 
     heater_state.change_mode(HeaterMode::HeatHigh);
     heater_state.set_temp(35);
 
-    app_state.last_called_day = datetime().day;
+    app_state.last_daytime_run_day = datetime().day;
     notification_app.notify(&DAYTIME_CHANGE);
 }
 
