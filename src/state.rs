@@ -21,7 +21,7 @@ pub enum RunState {
     SetDaytimeHeat,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum ActiveDevice {
     Heater,
     Fan,

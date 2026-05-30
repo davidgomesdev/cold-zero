@@ -11,8 +11,8 @@ mod ir;
 mod notification;
 mod state;
 
-use crate::fan::FanState;
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
+use crate::fan::FanState;
 use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
