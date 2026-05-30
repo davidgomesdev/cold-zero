@@ -29,7 +29,7 @@ use flipperzero_sys::{
     gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set,
     view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update,
     Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever,
-    Gui, GuiLayerFullscreen, InputEvent, InputKeyBack,
+    Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyLeft, InputKeyRight,
     InputKeyOk, InputTypeLong, InputTypeShort, ViewPort,
     ViewPortOrientationHorizontal,
 };
@@ -89,7 +89,9 @@ fn run() {
             };
             let app_state = app_state.as_mut().expect("App state is null!");
 
-            if app_state.last_daytime_run_day < time.day {
+            if app_state.last_daytime_run_day < time.day
+                && app_state.active_device == ActiveDevice::Heater
+            {
                 if time.hour < END_OF_START_HOUR && time.hour >= start_hour {
                     start_of_day_power_heater(&mut notification_app, app_state);
 
@@ -141,6 +143,7 @@ fn handle_key_presses(
                 return false;
             }
             InputKeyOk => handle_ok_press(notification_app, app_state, input_event),
+            InputKeyLeft | InputKeyRight => cycle_device(app_state),
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -157,12 +160,24 @@ fn handle_ok_press(
     app_state: &mut AppState,
     input_event: InputEvent,
 ) {
+    match app_state.active_device {
+        ActiveDevice::Heater => handle_heater_ok_press(notification_app, app_state, input_event),
+        ActiveDevice::Fan => handle_fan_ok_press(app_state, input_event),
+    }
+    app_state.run_state = RunState::WaitingForDaytime;
+}
+
+#[allow(non_upper_case_globals)]
+fn handle_heater_ok_press(
+    notification_app: &mut NotificationApp,
+    app_state: &mut AppState,
+    input_event: InputEvent,
+) {
     if (input_event.type_ == InputTypeLong || input_event.type_ == InputTypeShort)
         && app_state.heater_state.is_on
     {
         app_state.heater_state.power_off();
         notification_app.notify(&MANUAL_POWER_OFF);
-
         return;
     }
 
@@ -181,8 +196,25 @@ fn handle_ok_press(
             );
         }
     }
+}
 
-    app_state.run_state = RunState::WaitingForDaytime;
+#[allow(non_upper_case_globals)]
+fn handle_fan_ok_press(app_state: &mut AppState, input_event: InputEvent) {
+    if input_event.type_ != InputTypeShort && input_event.type_ != InputTypeLong {
+        return;
+    }
+    if app_state.fan_state.is_on {
+        app_state.fan_state.power_off();
+    } else {
+        app_state.fan_state.power_on();
+    }
+}
+
+fn cycle_device(app_state: &mut AppState) {
+    app_state.active_device = match app_state.active_device {
+        ActiveDevice::Heater => ActiveDevice::Fan,
+        ActiveDevice::Fan => ActiveDevice::Heater,
+    };
 }
 
 fn start_of_day_power_heater(notification_app: &mut NotificationApp, app_state: &mut AppState) {
