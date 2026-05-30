@@ -11,6 +11,7 @@ pub struct FanState {
     pub fan_mode: FanMode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum FanLight {
     Full,
@@ -18,6 +19,7 @@ pub enum FanLight {
     Off,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum FanMode {
     F1,
