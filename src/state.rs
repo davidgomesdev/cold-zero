@@ -1,3 +1,4 @@
+use crate::fan::FanState;
 use crate::ir::ir_press_button;
 use crate::ir::timings::{COOLER_BTN, MODE_BTN, POWER_BTN, WARMER_BTN};
 use flipperzero::{info, warn};
@@ -5,8 +6,10 @@ use flipperzero_sys::FuriMutex;
 use ufmt::derive::uDebug;
 
 pub struct AppState {
-    pub last_called_day: u8,
+    pub last_daytime_run_day: u8,
     pub heater_state: HeaterState,
+    pub fan_state: FanState,
+    pub active_device: ActiveDevice,
     pub run_state: RunState,
     pub mutex: *mut FuriMutex,
 }
@@ -16,6 +19,12 @@ pub enum RunState {
     WaitingForDaytime,
     Changing,
     SetDaytimeHeat,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum ActiveDevice {
+    Heater,
+    Fan,
 }
 
 pub struct HeaterState {

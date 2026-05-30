@@ -11,8 +11,9 @@ mod ir;
 mod notification;
 mod state;
 
+use crate::fan::FanState;
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
-use crate::state::{HeaterMode, HeaterState, RunState};
+use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
 use alloc::format;
@@ -57,6 +58,8 @@ fn run() {
 
         let app_state = Box::into_raw(Box::new(AppState {
             heater_state: HeaterState::default(),
+            fan_state: FanState::default(),
+            active_device: ActiveDevice::Heater,
             run_state: RunState::WaitingForDaytime,
             last_daytime_run_day: 0,
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
