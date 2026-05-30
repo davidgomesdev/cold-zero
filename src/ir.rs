@@ -62,3 +62,15 @@ pub mod timings {
         573, 537, 1702, 537, 1701, 537, 1702, 537, 1702, 537, 13656, 8971, 2285, 537,
     ];
 }
+
+pub mod fan {
+    pub const FREQUENCY: u32 = 38000;
+    pub const DUTY_CYCLE: f32 = 0.33;
+
+    /// Mock — replace with pulse array captured from the real remote
+    pub const POWER_BTN: [u32; 1] = [0];
+    /// Mock — replace with pulse array captured from the real remote
+    pub const TIMER_BTN: [u32; 1] = [0];
+    /// Mock — replace with pulse array captured from the real remote
+    pub const LIGHT_BTN: [u32; 1] = [0];
+}
