@@ -59,6 +59,20 @@ fn run() {
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
         }));
 
+        // If the app is opened when the trigger window has already started (or passed),
+        // mark today as handled so the heater doesn't fire immediately on launch.
+        {
+            let time = datetime();
+            let start_hour = if time.weekday > 5 {
+                START_HOUR_WEEKENDS
+            } else {
+                START_HOUR_WEEKDAYS
+            };
+            if time.hour >= start_hour {
+                (*app_state).last_daytime_run_day = time.day;
+            }
+        }
+
         view_port_draw_callback_set(view_port, Some(on_draw), app_state.cast());
         view_port_input_callback_set(view_port, Some(on_input), queue.cast());
         view_port_set_orientation(view_port, ViewPortOrientationHorizontal);
