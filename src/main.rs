@@ -24,7 +24,7 @@ use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyLeft, InputKeyOk, InputKeyRight, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft};
+use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft};
 use state::AppState;
 
 manifest!(
@@ -138,6 +138,7 @@ fn handle_key_presses(
             }
             InputKeyOk => handle_ok_press(notification_app, app_state, input_event),
             InputKeyLeft | InputKeyRight => cycle_device(app_state),
+            InputKeyDown => handle_down_long_press(notification_app, app_state, input_event),
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -208,6 +209,30 @@ fn cycle_device(app_state: &mut AppState) {
         ActiveDevice::Heater => ActiveDevice::Fan,
         ActiveDevice::Fan => ActiveDevice::Heater,
     };
+}
+
+#[allow(non_upper_case_globals)]
+fn handle_down_long_press(
+    notification_app: &mut NotificationApp,
+    app_state: &mut AppState,
+    input_event: InputEvent,
+) {
+    if input_event.type_ != InputTypeLong {
+        return;
+    }
+    match app_state.active_device {
+        ActiveDevice::Heater => {
+            if app_state.heater_state.is_on {
+                app_state.heater_state.power_off();
+                notification_app.notify(&MANUAL_POWER_OFF);
+            }
+        }
+        ActiveDevice::Fan => {
+            if app_state.fan_state.is_on {
+                app_state.fan_state.power_off();
+            }
+        }
+    }
 }
 
 fn start_of_day_power_heater(notification_app: &mut NotificationApp, app_state: &mut AppState) {
