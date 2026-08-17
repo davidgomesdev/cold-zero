@@ -24,7 +24,7 @@ use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft, furi_hal_power_shutdown, halt};
+use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKey, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft, furi_hal_power_shutdown, halt};
 use state::AppState;
 
 manifest!(
@@ -151,6 +151,9 @@ fn handle_key_presses(
             }
             InputKeyOk => handle_ok_press(notification_app, app_state, input_event),
             InputKeyLeft | InputKeyRight => cycle_device(app_state),
+            InputKeyUp | InputKeyDown if input_event.type_ == InputTypeShort => {
+                handle_fan_control(app_state, input_event.key)
+            }
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -208,13 +211,31 @@ fn handle_heater_ok_press(
 
 #[allow(non_upper_case_globals)]
 fn handle_fan_ok_press(app_state: &mut AppState, input_event: InputEvent) {
-    if input_event.type_ != InputTypeShort && input_event.type_ != InputTypeLong {
+    if app_state.fan_state.is_on {
+        if input_event.type_ == InputTypeShort || input_event.type_ == InputTypeLong {
+            app_state.fan_state.power_off();
+        }
         return;
     }
-    if app_state.fan_state.is_on {
-        app_state.fan_state.power_off();
-    } else {
-        app_state.fan_state.power_on();
+
+    match input_event.type_ {
+        InputTypeShort => app_state.fan_state.power_on(),
+        InputTypeLong => app_state.fan_state.power_on_full(),
+        _ => {}
+    }
+}
+
+/// Up/Down control the fan only, and only while it's running.
+#[allow(non_upper_case_globals)]
+fn handle_fan_control(app_state: &mut AppState, key: InputKey) {
+    if app_state.active_device != ActiveDevice::Fan || !app_state.fan_state.is_on {
+        return;
+    }
+
+    match key {
+        InputKeyUp => app_state.fan_state.next_speed(),
+        InputKeyDown => app_state.fan_state.rotate(),
+        _ => {}
     }
 }
 
@@ -327,8 +348,13 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
             FanMode::Nature => "Nat",
         };
         let fan_detail = format!(
-            "Light:{light_str} Timer:{}h {mode_str}\0",
+            "L:{light_str} T:{}h {mode_str} Rot:{}\0",
             app_state.fan_state.timer,
+            if app_state.fan_state.rotating {
+                "on"
+            } else {
+                "off"
+            },
         );
         canvas_draw_str(canvas, 0, 30, fan_detail.as_ptr());
     } else {
@@ -338,9 +364,9 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
     draw_time(canvas);
 
     let hints = if app_state.fan_state.is_on {
-        c"OK:off".as_ptr()
+        c"OK:off U:spd D:rot".as_ptr()
     } else {
-        c"OK:on".as_ptr()
+        c"OK:on Hold:all".as_ptr()
     };
     draw_hints(canvas, hints);
 }
