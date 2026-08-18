@@ -7,8 +7,12 @@ pub struct FanState {
     pub is_on: bool,
     /// 0–9 hours
     pub timer: u8,
+    /// Whether TIMER has been pressed since power on — the fan swallows the
+    /// first one, so it has to be sent twice to register.
+    timer_pressed: bool,
     pub light: FanLight,
-    pub fan_mode: FanMode,
+    pub mode: FanMode,
+    pub speed: FanSpeed,
     pub rotating: bool,
 }
 
@@ -20,24 +24,42 @@ pub enum FanLight {
     Off,
 }
 
-#[allow(dead_code)]
+/// Set by the MODE button, independent of speed.
 #[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum FanMode {
-    F1,
-    F2,
-    F3,
+    Normal,
     Sleep,
     Nature,
 }
 
+/// Set by the SPEED button. Every mode has F1–F3; SF (steady flow) exists
+/// only in Normal.
+#[derive(Debug, PartialEq, Eq, uDebug)]
+pub enum FanSpeed {
+    F1,
+    F2,
+    F3,
+    SF,
+}
+
 impl FanMode {
-    /// The SPEED button only cycles the three fan speeds; Sleep/Nature come
-    /// from the MODE button and drop back to F1 when speed is pressed.
-    fn next_speed(&self) -> FanMode {
+    fn next(&self) -> FanMode {
         match self {
-            FanMode::F1 => FanMode::F2,
-            FanMode::F2 => FanMode::F3,
-            _ => FanMode::F1,
+            FanMode::Normal => FanMode::Sleep,
+            FanMode::Sleep => FanMode::Nature,
+            FanMode::Nature => FanMode::Normal,
+        }
+    }
+}
+
+impl FanSpeed {
+    fn next(&self, mode: &FanMode) -> FanSpeed {
+        match self {
+            FanSpeed::F1 => FanSpeed::F2,
+            FanSpeed::F2 => FanSpeed::F3,
+            // SF is only reachable in Normal; the other modes wrap at F3
+            FanSpeed::F3 if *mode == FanMode::Normal => FanSpeed::SF,
+            _ => FanSpeed::F1,
         }
     }
 }
@@ -47,8 +69,10 @@ impl Default for FanState {
         FanState {
             is_on: false,
             timer: 0,
+            timer_pressed: false,
             light: FanLight::Full,
-            fan_mode: FanMode::F2,
+            mode: FanMode::Normal,
+            speed: FanSpeed::F2,
             rotating: false,
         }
     }
@@ -63,7 +87,8 @@ impl FanState {
         self.timer = 0;
         self.light = FanLight::Full;
         self.rotating = false;
-        // fan_mode stays F2 (fan defaults to F2 on power on)
+        self.mode = FanMode::Normal;
+        self.speed = FanSpeed::F2;
     }
 
     /// Power on and apply the usual setup: 1h timer and light off.
@@ -97,10 +122,23 @@ impl FanState {
     }
 
     pub fn next_speed(&mut self) {
-        info!("Fan: next speed (from {:?})", self.fan_mode);
+        info!("Fan: next speed (from {:?})", self.speed);
         ir_press_button(&fan_ir::SPEED_BTN);
 
-        self.fan_mode = self.fan_mode.next_speed();
+        self.speed = self.speed.next(&self.mode);
+        self.turn_light_off();
+    }
+
+    pub fn next_mode(&mut self) {
+        info!("Fan: next mode (from {:?})", self.mode);
+        ir_press_button(&fan_ir::MODE_BTN);
+
+        self.mode = self.mode.next();
+        // SF doesn't exist outside Normal, so leaving Normal drops to F1
+        if self.mode != FanMode::Normal && self.speed == FanSpeed::SF {
+            self.speed = FanSpeed::F1;
+        }
+
         self.turn_light_off();
     }
 

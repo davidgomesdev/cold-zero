@@ -2,6 +2,10 @@ use flipperzero::info;
 use flipperzero_sys::infrared_send_raw_ext;
 use self::timings::{DUTY_CYCLE, FREQUENCY};
 
+/// Send each frame exactly once. Repeating the packet for resilience was
+/// tested on the tower fan and rejected: it does not dedupe identical frames,
+/// so every repeat lands as a second button press (rotation toggling straight
+/// back off, speed stepping twice). Don't reintroduce it.
 pub fn ir_press_button(timings: &[u32]) {
     unsafe {
         info!("Sending button");
@@ -99,6 +103,20 @@ pub mod fan {
         537, 572, 537, 1702, 537, 1702, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572,
         // ~command 0xF9 LSB-first: 1,0,0,1,1,1,1,1
         537, 1702, 537, 572, 537, 572, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702,
+        537,
+    ];
+
+    // command 0x08
+    pub const MODE_BTN: [u32; 67] = [
+        9000, 4500,
+        // address 0x80 LSB-first: 0,0,0,0,0,0,0,1
+        537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 572, 537, 1702,
+        // ~address 0x7F LSB-first: 1,1,1,1,1,1,1,0
+        537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 1702, 537, 572,
+        // command 0x08 LSB-first: 0,0,0,1,0,0,0,0
+        537, 572, 537, 572, 537, 572, 537, 1702, 537, 572, 537, 572, 537, 572, 537, 572,
+        // ~command 0xF7 LSB-first: 1,1,1,0,1,1,1,1
+        537, 1702, 537, 1702, 537, 1702, 537, 572, 537, 1702, 537, 1702, 537, 1702, 537, 1702,
         537,
     ];
 
