@@ -45,8 +45,8 @@ const SCREEN_HEIGHT: i32 = 63;
 /// Column the bulb ON/OFF values start at, so they line up under each other.
 /// Wide enough to clear "Escritorio:" in either of the stock fonts.
 const BULB_VALUE_X: i32 = 70;
-/// Column the ESP pin names start at, right of the ON/OFF values.
-const BULB_PIN_X: i32 = 95;
+/// Second column of the wiring row under the two bulbs.
+const BULB_WIRING_X: i32 = 66;
 const START_HOUR_WEEKDAYS: u8 = 8;
 const START_HOUR_WEEKENDS: u8 = 9;
 const END_OF_START_HOUR: u8 = 13;
@@ -452,11 +452,14 @@ unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) {
         20,
         on_off(app_state.bulbs_state.escritorio),
     );
-    canvas_draw_str(canvas, BULB_PIN_X, 20, bulbs::ESCRITORIO_ESP_PIN.as_ptr());
 
     canvas_draw_str(canvas, 0, 30, c"Quarto:".as_ptr());
     canvas_draw_str(canvas, BULB_VALUE_X, 30, on_off(app_state.bulbs_state.quarto));
-    canvas_draw_str(canvas, BULB_PIN_X, 30, bulbs::QUARTO_ESP_PIN.as_ptr());
+
+    // Static wiring reference, in the same order as the rows above. It gets its
+    // own row because both pins per row overrun 127px in the wider stock font.
+    canvas_draw_str(canvas, 0, 40, bulbs::ESCRITORIO_WIRING.as_ptr());
+    canvas_draw_str(canvas, BULB_WIRING_X, 40, bulbs::QUARTO_WIRING.as_ptr());
 
     draw_time(canvas);
 

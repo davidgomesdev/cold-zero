@@ -30,11 +30,11 @@ pub struct BulbsState {
     pub quarto: bool,
 }
 
-/// The ESPHome pin on the far end of each wire, shown on screen so the wiring
-/// is checkable against the board without opening the YAML. Keep in step with
+/// Each bulb's wire, Flipper pin to ESPHome pin, shown on screen so it can be
+/// checked against the board without opening the YAML. Keep in step with
 /// `pin()` below.
-pub const ESCRITORIO_ESP_PIN: &CStr = c"GPIO5";
-pub const QUARTO_ESP_PIN: &CStr = c"GPIO4";
+pub const ESCRITORIO_WIRING: &CStr = c"PA7>GPIO5";
+pub const QUARTO_WIRING: &CStr = c"PA6>GPIO4";
 
 fn pin(bulb: Bulb) -> *const GpioPin {
     match bulb {
