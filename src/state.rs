@@ -1,3 +1,4 @@
+use crate::bulbs::BulbsState;
 use crate::fan::FanState;
 use crate::ir::ir_press_button;
 use crate::ir::timings::{COOLER_BTN, MODE_BTN, POWER_BTN, WARMER_BTN};
@@ -9,6 +10,7 @@ pub struct AppState {
     pub last_daytime_run_day: u8,
     pub heater_state: HeaterState,
     pub fan_state: FanState,
+    pub bulbs_state: BulbsState,
     pub active_device: ActiveDevice,
     pub run_state: RunState,
     pub mutex: *mut FuriMutex,
@@ -25,6 +27,7 @@ pub enum RunState {
 pub enum ActiveDevice {
     Heater,
     Fan,
+    Bulbs,
 }
 
 pub struct HeaterState {
