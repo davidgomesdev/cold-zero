@@ -45,6 +45,8 @@ const SCREEN_HEIGHT: i32 = 63;
 /// Column the bulb ON/OFF values start at, so they line up under each other.
 /// Wide enough to clear "Escritorio:" in either of the stock fonts.
 const BULB_VALUE_X: i32 = 70;
+/// Column the ESP pin names start at, right of the ON/OFF values.
+const BULB_PIN_X: i32 = 95;
 const START_HOUR_WEEKDAYS: u8 = 8;
 const START_HOUR_WEEKENDS: u8 = 9;
 const END_OF_START_HOUR: u8 = 13;
@@ -443,16 +445,18 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
 unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) {
     draw_header(canvas, app_state);
 
-    canvas_draw_str(canvas, 0, 20, c"Escritorio:".as_ptr());
+    canvas_draw_str(canvas, 0, 20, c"Escrit\xf3rio:".as_ptr());
     canvas_draw_str(
         canvas,
         BULB_VALUE_X,
         20,
         on_off(app_state.bulbs_state.escritorio),
     );
+    canvas_draw_str(canvas, BULB_PIN_X, 20, bulbs::ESCRITORIO_ESP_PIN.as_ptr());
 
     canvas_draw_str(canvas, 0, 30, c"Quarto:".as_ptr());
     canvas_draw_str(canvas, BULB_VALUE_X, 30, on_off(app_state.bulbs_state.quarto));
+    canvas_draw_str(canvas, BULB_PIN_X, 30, bulbs::QUARTO_ESP_PIN.as_ptr());
 
     draw_time(canvas);
 

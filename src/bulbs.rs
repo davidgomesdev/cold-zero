@@ -9,6 +9,7 @@
 //! line high on its own, which means an
 //! unplugged cable or a closed app reads as released, never stuck-pressed.
 
+use core::ffi::CStr;
 use core::time::Duration;
 use flipperzero::furi::thread::sleep;
 use flipperzero::info;
@@ -28,6 +29,12 @@ pub struct BulbsState {
     pub escritorio: bool,
     pub quarto: bool,
 }
+
+/// The ESPHome pin on the far end of each wire, shown on screen so the wiring
+/// is checkable against the board without opening the YAML. Keep in step with
+/// `pin()` below.
+pub const ESCRITORIO_ESP_PIN: &CStr = c"GPIO5";
+pub const QUARTO_ESP_PIN: &CStr = c"GPIO4";
 
 fn pin(bulb: Bulb) -> *const GpioPin {
     match bulb {
