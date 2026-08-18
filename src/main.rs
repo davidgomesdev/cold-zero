@@ -6,12 +6,14 @@ extern crate alloc;
 extern crate flipperzero_rt;
 
 mod allocator;
+mod bulbs;
 mod fan;
 mod ir;
 mod notification;
 mod state;
 
-use crate::fan::{FanLight, FanMode, FanState};
+use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
+use crate::bulbs::BulbsState;
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
 use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
 use alloc::alloc::{alloc, dealloc};
@@ -24,7 +26,7 @@ use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKey, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft, furi_hal_power_shutdown, halt};
+use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft, furi_hal_power_shutdown, halt};
 use state::AppState;
 
 manifest!(
@@ -40,6 +42,9 @@ entry!(main);
 const RECORD_GUI: *const c_char = c"gui".as_ptr();
 const SCREEN_WIDTH: i32 = 127;
 const SCREEN_HEIGHT: i32 = 63;
+/// Column the bulb ON/OFF values start at, so they line up under each other.
+/// Wide enough to clear "Escritorio:" in either of the stock fonts.
+const BULB_VALUE_X: i32 = 70;
 const START_HOUR_WEEKDAYS: u8 = 8;
 const START_HOUR_WEEKENDS: u8 = 9;
 const END_OF_START_HOUR: u8 = 13;
@@ -53,7 +58,8 @@ fn run() {
         let app_state = Box::into_raw(Box::new(AppState {
             heater_state: HeaterState::default(),
             fan_state: FanState::default(),
-            active_device: ActiveDevice::Heater,
+            bulbs_state: BulbsState::default(),
+            active_device: default_device(datetime().month),
             run_state: RunState::WaitingForDaytime,
             last_daytime_run_day: 0,
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
@@ -76,6 +82,8 @@ fn run() {
         view_port_draw_callback_set(view_port, Some(on_draw), app_state.cast());
         view_port_input_callback_set(view_port, Some(on_input), queue.cast());
         view_port_set_orientation(view_port, ViewPortOrientationHorizontal);
+
+        bulbs::init();
 
         let gui: *mut Gui = furi_record_open(RECORD_GUI).cast();
 
@@ -124,6 +132,8 @@ fn run() {
             furi_mutex_release(app_state.mutex);
         }
 
+        bulbs::deinit();
+
         dealloc(input_event as *mut u8, input_event_layout);
         view_port_enabled_set(view_port, false);
         furi_message_queue_free(queue);
@@ -150,10 +160,12 @@ fn handle_key_presses(
                 return false;
             }
             InputKeyOk => handle_ok_press(notification_app, app_state, input_event),
-            InputKeyLeft | InputKeyRight => cycle_device(app_state),
-            InputKeyUp | InputKeyDown if input_event.type_ == InputTypeShort => {
-                handle_fan_control(app_state, input_event.key)
-            }
+            InputKeyLeft | InputKeyRight => cycle_device(app_state, input_event),
+            InputKeyUp | InputKeyDown => match app_state.active_device {
+                ActiveDevice::Fan => handle_fan_control(app_state, input_event),
+                ActiveDevice::Bulbs => handle_bulbs_control(app_state, input_event),
+                ActiveDevice::Heater => {}
+            },
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -172,6 +184,7 @@ fn handle_ok_press(
     match app_state.active_device {
         ActiveDevice::Heater => handle_heater_ok_press(notification_app, app_state, input_event),
         ActiveDevice::Fan => handle_fan_ok_press(app_state, input_event),
+        ActiveDevice::Bulbs => handle_bulbs_ok_press(app_state, input_event),
     }
     app_state.run_state = RunState::WaitingForDaytime;
 }
@@ -225,24 +238,72 @@ fn handle_fan_ok_press(app_state: &mut AppState, input_event: InputEvent) {
     }
 }
 
-/// Up/Down control the fan only, and only while it's running.
+/// Up toggles the escritorio, Down the quarto. Both fire on release, so holding
+/// either one does nothing extra.
 #[allow(non_upper_case_globals)]
-fn handle_fan_control(app_state: &mut AppState, key: InputKey) {
-    if app_state.active_device != ActiveDevice::Fan || !app_state.fan_state.is_on {
+fn handle_bulbs_control(app_state: &mut AppState, input_event: InputEvent) {
+    if input_event.type_ != InputTypeShort {
         return;
     }
 
-    match key {
-        InputKeyUp => app_state.fan_state.next_speed(),
-        InputKeyDown => app_state.fan_state.rotate(),
+    match input_event.key {
+        InputKeyUp => app_state.bulbs_state.toggle_escritorio(),
+        InputKeyDown => app_state.bulbs_state.toggle_quarto(),
         _ => {}
     }
 }
 
-fn cycle_device(app_state: &mut AppState) {
-    app_state.active_device = match app_state.active_device {
-        ActiveDevice::Heater => ActiveDevice::Fan,
-        ActiveDevice::Fan => ActiveDevice::Heater,
+/// OK drives the pair: on unless both are already on, otherwise off.
+fn handle_bulbs_ok_press(app_state: &mut AppState, input_event: InputEvent) {
+    if input_event.type_ != InputTypeShort && input_event.type_ != InputTypeLong {
+        return;
+    }
+
+    let all_on = app_state.bulbs_state.both_on();
+    app_state.bulbs_state.set_both(!all_on);
+}
+
+/// Up/Down control the fan only, and only while it's running.
+/// Up cycles speed, holding Up cycles mode, Down toggles rotation.
+#[allow(non_upper_case_globals)]
+fn handle_fan_control(app_state: &mut AppState, input_event: InputEvent) {
+    if !app_state.fan_state.is_on {
+        return;
+    }
+
+    match (input_event.key, input_event.type_) {
+        (InputKeyUp, InputTypeShort) => app_state.fan_state.next_speed(),
+        (InputKeyUp, InputTypeLong) => app_state.fan_state.next_mode(),
+        (InputKeyDown, InputTypeShort) => app_state.fan_state.rotate(),
+        _ => {}
+    }
+}
+
+/// Which device the app opens on, by Portuguese meteorological season:
+/// fan for spring and summer (Mar–Aug), heater for autumn and winter (Sep–Feb).
+fn default_device(month: u8) -> ActiveDevice {
+    if (3..=8).contains(&month) {
+        ActiveDevice::Fan
+    } else {
+        ActiveDevice::Heater
+    }
+}
+
+/// One tap emits Press, Short and Release; without the guard the ring would be
+/// stepped three times per press, which lands back where it started.
+fn cycle_device(app_state: &mut AppState, input_event: InputEvent) {
+    if input_event.type_ != InputTypeShort {
+        return;
+    }
+
+    let forward = input_event.key == InputKeyRight;
+    app_state.active_device = match (&app_state.active_device, forward) {
+        (ActiveDevice::Heater, true) => ActiveDevice::Fan,
+        (ActiveDevice::Fan, true) => ActiveDevice::Bulbs,
+        (ActiveDevice::Bulbs, true) => ActiveDevice::Heater,
+        (ActiveDevice::Heater, false) => ActiveDevice::Bulbs,
+        (ActiveDevice::Fan, false) => ActiveDevice::Heater,
+        (ActiveDevice::Bulbs, false) => ActiveDevice::Fan,
     };
 }
 
@@ -263,6 +324,7 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
         match app_state.active_device {
             ActiveDevice::Heater => draw_heater(canvas, app_state),
             ActiveDevice::Fan => draw_fan(canvas, app_state),
+            ActiveDevice::Bulbs => draw_bulbs(canvas, app_state),
         }
     }
 }
@@ -283,7 +345,7 @@ unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
         HeaterMode::Eco => "Eco",
     };
     let heater_str = format!(
-        "Power: {} {}C {}",
+        "Power: {} {}C {}\0",
         if app_state.heater_state.is_on {
             "ON"
         } else {
@@ -313,6 +375,7 @@ unsafe fn draw_header(canvas: *mut Canvas, app_state: &AppState) {
     let active_device_label = match app_state.active_device {
         ActiveDevice::Heater => c"< Heater >".as_ptr(),
         ActiveDevice::Fan => c"< Fan >".as_ptr(),
+        ActiveDevice::Bulbs => c"< Bulbs >".as_ptr(),
     };
     canvas_draw_str_aligned(
         canvas,
@@ -340,23 +403,29 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
             FanLight::Partial => "Part",
             FanLight::Off => "Off",
         };
-        let mode_str = match app_state.fan_state.fan_mode {
-            FanMode::F1 => "F1",
-            FanMode::F2 => "F2",
-            FanMode::F3 => "F3",
-            FanMode::Sleep => "Slp",
-            FanMode::Nature => "Nat",
+        let mode_str = match app_state.fan_state.mode {
+            FanMode::Normal => "Normal",
+            FanMode::Sleep => "Sleep",
+            FanMode::Nature => "Nature",
         };
-        let fan_detail = format!(
-            "L:{light_str} T:{}h {mode_str} Rot:{}\0",
-            app_state.fan_state.timer,
+        let speed_str = match app_state.fan_state.speed {
+            FanSpeed::F1 => "F1",
+            FanSpeed::F2 => "F2",
+            FanSpeed::F3 => "F3",
+            FanSpeed::SF => "SF",
+        };
+        let fan_mode = format!(
+            "{mode_str} {speed_str} Rot:{}\0",
             if app_state.fan_state.rotating {
                 "on"
             } else {
                 "off"
             },
         );
-        canvas_draw_str(canvas, 0, 30, fan_detail.as_ptr());
+        canvas_draw_str(canvas, 0, 30, fan_mode.as_ptr());
+
+        let fan_detail = format!("L:{light_str} T:{}h\0", app_state.fan_state.timer);
+        canvas_draw_str(canvas, 0, 40, fan_detail.as_ptr());
     } else {
         canvas_draw_str(canvas, 0, 30, c"".as_ptr());
     }
@@ -369,6 +438,34 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
         c"OK:on Hold:all".as_ptr()
     };
     draw_hints(canvas, hints);
+}
+
+unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) {
+    draw_header(canvas, app_state);
+
+    canvas_draw_str(canvas, 0, 20, c"Escritorio:".as_ptr());
+    canvas_draw_str(
+        canvas,
+        BULB_VALUE_X,
+        20,
+        on_off(app_state.bulbs_state.escritorio),
+    );
+
+    canvas_draw_str(canvas, 0, 30, c"Quarto:".as_ptr());
+    canvas_draw_str(canvas, BULB_VALUE_X, 30, on_off(app_state.bulbs_state.quarto));
+
+    draw_time(canvas);
+
+    let hints = if app_state.bulbs_state.both_on() {
+        c"U:Esc D:Qua OK:off".as_ptr()
+    } else {
+        c"U:Esc D:Qua OK:on".as_ptr()
+    };
+    draw_hints(canvas, hints);
+}
+
+fn on_off(on: bool) -> *const c_char {
+    if on { c"ON".as_ptr() } else { c"OFF".as_ptr() }
 }
 
 unsafe fn draw_hints(canvas: *mut Canvas, hints: *const c_char) {
