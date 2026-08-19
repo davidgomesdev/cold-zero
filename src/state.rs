@@ -8,6 +8,10 @@ use ufmt::derive::uDebug;
 
 pub struct AppState {
     pub last_daytime_run_day: u8,
+    /// True while a button sequence is going out over IR. The main loop is
+    /// blocked for the whole sequence, so this is what tells the draw callback
+    /// to show "Changing..." instead of stale state.
+    pub sending: bool,
     pub heater_state: HeaterState,
     pub fan_state: FanState,
     pub bulbs_state: BulbsState,
@@ -19,7 +23,6 @@ pub struct AppState {
 #[derive(Debug, PartialEq, Eq, uDebug)]
 pub enum RunState {
     WaitingForDaytime,
-    Changing,
     SetDaytimeHeat,
 }
 

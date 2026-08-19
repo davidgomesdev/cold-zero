@@ -85,6 +85,7 @@ impl FanState {
 
         self.is_on = true;
         self.timer = 0;
+        self.timer_pressed = false;
         self.light = FanLight::Full;
         self.rotating = false;
         self.mode = FanMode::Normal;
@@ -94,13 +95,7 @@ impl FanState {
     /// Power on and apply the usual setup: 1h timer and light off.
     pub fn power_on_full(&mut self) {
         self.power_on();
-
-        // First TIMER press is ignored (same physical quirk as heater's warmer button)
-        ir_press_button(&fan_ir::TIMER_BTN);
-        ir_press_button(&fan_ir::TIMER_BTN);
-        self.timer = 1;
-
-        self.turn_light_off();
+        self.next_timer();
     }
 
     pub fn power_off(&mut self) {
@@ -109,6 +104,7 @@ impl FanState {
 
         self.is_on = false;
         self.timer = 0;
+        self.timer_pressed = false;
         self.light = FanLight::Full;
         self.rotating = false;
     }
@@ -126,6 +122,21 @@ impl FanState {
         ir_press_button(&fan_ir::SPEED_BTN);
 
         self.speed = self.speed.next(&self.mode);
+        self.turn_light_off();
+    }
+
+    /// Steps the sleep timer by an hour, wrapping 9h back to off.
+    pub fn next_timer(&mut self) {
+        info!("Fan: next timer (from {})", self.timer);
+
+        // The fan swallows the first TIMER press after power on
+        if !self.timer_pressed {
+            ir_press_button(&fan_ir::TIMER_BTN);
+            self.timer_pressed = true;
+        }
+        ir_press_button(&fan_ir::TIMER_BTN);
+
+        self.timer = (self.timer + 1) % 10;
         self.turn_light_off();
     }
 
