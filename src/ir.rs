@@ -1,6 +1,25 @@
+use core::ptr::null_mut;
+use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use flipperzero::info;
-use flipperzero_sys::infrared_send_raw_ext;
+use flipperzero_sys::{ViewPort, infrared_send_raw_ext, view_port_update};
 use self::timings::{DUTY_CYCLE, FREQUENCY};
+
+/// The view port to repaint between frames. A send blocks the main loop for as
+/// long as it takes, so nothing else can drive the "Changing..." animation —
+/// the send has to do it. One app, one view port: a static beats threading the
+/// pointer through every button call.
+static VIEW_PORT: AtomicPtr<ViewPort> = AtomicPtr::new(null_mut());
+/// Frames sent so far, so the dots move by one per press. Wraps at 255, which
+/// is fine — only the value mod the dot count is ever read.
+static SEND_COUNT: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_view_port(view_port: *mut ViewPort) {
+    VIEW_PORT.store(view_port, Ordering::Relaxed);
+}
+
+pub fn send_count() -> u8 {
+    SEND_COUNT.load(Ordering::Relaxed)
+}
 
 /// Send each frame exactly once. Repeating the packet for resilience was
 /// tested on the tower fan and rejected: it does not dedupe identical frames,
@@ -16,6 +35,15 @@ pub fn ir_press_button(timings: &[u32]) {
             FREQUENCY,
             DUTY_CYCLE,
         );
+    }
+
+    SEND_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    let view_port = VIEW_PORT.load(Ordering::Relaxed);
+    if !view_port.is_null() {
+        // Safe to call while the main loop holds the mutex: on_draw never
+        // takes it, so the GUI thread can repaint mid-sequence.
+        unsafe { view_port_update(view_port) };
     }
 }
 

@@ -25,6 +25,7 @@ use core::ffi::{CStr, c_char, c_void};
 use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
+use flipperzero::notification::led::{BLINK_START_BLUE, BLINK_STOP};
 use flipperzero_rt::{entry, manifest};
 use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft, furi_hal_power_shutdown, halt};
 use state::AppState;
@@ -47,6 +48,8 @@ const SCREEN_HEIGHT: i32 = 63;
 const BULB_VALUE_X: i32 = 70;
 /// Second column of the wiring row under the two bulbs.
 const BULB_WIRING_X: i32 = 66;
+/// Animation frames for the label shown while a button sequence goes out.
+const CHANGING: [&CStr; 4] = [c"Changing", c"Changing.", c"Changing..", c"Changing..."];
 const START_HOUR_WEEKDAYS: u8 = 8;
 const START_HOUR_WEEKENDS: u8 = 9;
 const END_OF_START_HOUR: u8 = 13;
@@ -63,6 +66,7 @@ fn run() {
             bulbs_state: BulbsState::default(),
             active_device: default_device(datetime().month),
             run_state: RunState::WaitingForDaytime,
+            sending: false,
             last_daytime_run_day: 0,
             mutex: furi_mutex_alloc(FuriMutexTypeNormal),
         }));
@@ -81,6 +85,7 @@ fn run() {
             }
         }
 
+        ir::set_view_port(view_port);
         view_port_draw_callback_set(view_port, Some(on_draw), app_state.cast());
         view_port_input_callback_set(view_port, Some(on_input), queue.cast());
         view_port_set_orientation(view_port, ViewPortOrientationHorizontal);
@@ -161,13 +166,30 @@ fn handle_key_presses(
             InputKeyBack => {
                 return false;
             }
-            InputKeyOk => handle_ok_press(notification_app, app_state, input_event),
+            InputKeyOk | InputKeyUp | InputKeyDown => {
+                // The sends below block this thread for the whole sequence;
+                // paint "Changing..." first so the screen isn't left frozen on
+                // stale state while they go out.
+                app_state.sending = true;
+                // The notification service blinks on its own thread, so it
+                // keeps going for the whole sequence while this one blocks.
+                notification_app.notify(&BLINK_START_BLUE);
+                view_port_update(view_port);
+
+                if input_event.key == InputKeyOk {
+                    handle_ok_press(notification_app, app_state, input_event);
+                } else {
+                    match app_state.active_device {
+                        ActiveDevice::Fan => handle_fan_control(app_state, input_event),
+                        ActiveDevice::Bulbs => handle_bulbs_control(app_state, input_event),
+                        ActiveDevice::Heater => {}
+                    }
+                }
+
+                app_state.sending = false;
+                notification_app.notify(&BLINK_STOP);
+            }
             InputKeyLeft | InputKeyRight => cycle_device(app_state, input_event),
-            InputKeyUp | InputKeyDown => match app_state.active_device {
-                ActiveDevice::Fan => handle_fan_control(app_state, input_event),
-                ActiveDevice::Bulbs => handle_bulbs_control(app_state, input_event),
-                ActiveDevice::Heater => {}
-            },
             key => {
                 debug!("Received input that is not handled ({})", key.0);
             }
@@ -207,12 +229,10 @@ fn handle_heater_ok_press(
 
     match input_event.type_ {
         InputTypeShort => {
-            app_state.run_state = RunState::Changing;
             app_state.heater_state.power_on();
             notification_app.notify(&MANUAL_POWER_ON);
         }
         InputTypeLong => {
-            app_state.run_state = RunState::Changing;
             start_of_day_power_heater(notification_app, app_state);
         }
         _ => {
@@ -266,7 +286,8 @@ fn handle_bulbs_ok_press(app_state: &mut AppState, input_event: InputEvent) {
 }
 
 /// Up/Down control the fan only, and only while it's running.
-/// Up cycles speed, holding Up cycles mode, Down toggles rotation.
+/// Up cycles speed and holding it steps the timer; Down toggles rotation and
+/// holding it cycles mode.
 #[allow(non_upper_case_globals)]
 fn handle_fan_control(app_state: &mut AppState, input_event: InputEvent) {
     if !app_state.fan_state.is_on {
@@ -275,8 +296,9 @@ fn handle_fan_control(app_state: &mut AppState, input_event: InputEvent) {
 
     match (input_event.key, input_event.type_) {
         (InputKeyUp, InputTypeShort) => app_state.fan_state.next_speed(),
-        (InputKeyUp, InputTypeLong) => app_state.fan_state.next_mode(),
+        (InputKeyUp, InputTypeLong) => app_state.fan_state.next_timer(),
         (InputKeyDown, InputTypeShort) => app_state.fan_state.rotate(),
+        (InputKeyDown, InputTypeLong) => app_state.fan_state.next_mode(),
         _ => {}
     }
 }
@@ -328,6 +350,12 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
             ActiveDevice::Fan => draw_fan(canvas, app_state),
             ActiveDevice::Bulbs => draw_bulbs(canvas, app_state),
         }
+
+        if app_state.sending {
+            // Bumped by ir_press_button, so the dots step once per frame sent
+            let frame = ir::send_count() as usize % CHANGING.len();
+            canvas_draw_str(canvas, 0, 50, CHANGING[frame].as_ptr());
+        }
     }
 }
 
@@ -336,7 +364,6 @@ unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
 
     let status = match app_state.run_state {
         RunState::WaitingForDaytime => c"Waiting for daytime...".as_ptr(),
-        RunState::Changing => c"Changing heater state...".as_ptr(),
         RunState::SetDaytimeHeat => c"Heater set for daytime!".as_ptr(),
     };
     canvas_draw_str(canvas, 0, 20, status);
@@ -392,12 +419,19 @@ unsafe fn draw_header(canvas: *mut Canvas, app_state: &AppState) {
 unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
     draw_header(canvas, app_state);
 
-    let on_str = if app_state.fan_state.is_on {
-        c"Fan: ON".as_ptr()
+    if app_state.fan_state.is_on {
+        let on_str = format!(
+            "Fan: ON Rot:{}\0",
+            if app_state.fan_state.rotating {
+                "on"
+            } else {
+                "off"
+            },
+        );
+        canvas_draw_str(canvas, 0, 20, on_str.as_ptr());
     } else {
-        c"Fan: OFF".as_ptr()
-    };
-    canvas_draw_str(canvas, 0, 20, on_str);
+        canvas_draw_str(canvas, 0, 20, c"Fan: OFF".as_ptr());
+    }
 
     if app_state.fan_state.is_on {
         let light_str = match app_state.fan_state.light {
@@ -416,18 +450,17 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
             FanSpeed::F3 => "F3",
             FanSpeed::SF => "SF",
         };
-        let fan_mode = format!(
-            "{mode_str} {speed_str} Rot:{}\0",
-            if app_state.fan_state.rotating {
-                "on"
-            } else {
-                "off"
-            },
-        );
+        let fan_mode = format!("Mode {mode_str} {speed_str}\0");
         canvas_draw_str(canvas, 0, 30, fan_mode.as_ptr());
 
-        let fan_detail = format!("L:{light_str} T:{}h\0", app_state.fan_state.timer);
+        let fan_detail = format!("Light:{light_str} Timer:{}h\0", app_state.fan_state.timer);
         canvas_draw_str(canvas, 0, 40, fan_detail.as_ptr());
+
+        // The hold bindings have nowhere else to go: the bottom line is
+        // already the clock plus the short-press hints.
+        if !app_state.sending {
+            canvas_draw_str(canvas, 0, 50, c"hU:timer hD:mode".as_ptr());
+        }
     } else {
         canvas_draw_str(canvas, 0, 30, c"".as_ptr());
     }
@@ -435,7 +468,7 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
     draw_time(canvas);
 
     let hints = if app_state.fan_state.is_on {
-        c"OK:off U:spd D:rot".as_ptr()
+        c"U:spd D:rot".as_ptr()
     } else {
         c"OK:on Hold:all".as_ptr()
     };
