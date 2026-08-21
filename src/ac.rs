@@ -29,7 +29,7 @@ pub enum Field {
     Fan,
     SwingV,
     SwingH,
-    Output,
+    Run,
     Quiet,
     Comfort,
     Presence,
@@ -44,7 +44,7 @@ pub const FIELDS: [Field; 10] = [
     Field::Comfort,
     Field::Clean,
     Field::Quiet,
-    Field::Output,
+    Field::Run,
     Field::SwingV,
     Field::SwingH,
     Field::Presence,
@@ -58,7 +58,7 @@ impl Field {
             Field::Fan => c"Fan",
             Field::SwingV => c"Swing V",
             Field::SwingH => c"Swing H",
-            Field::Output => c"Output",
+            Field::Run => c"Run",
             Field::Quiet => c"Quiet",
             Field::Comfort => c"Comfort",
             // `daikin` keeps IRremoteESP8266's name for it (Sensor); the
@@ -77,7 +77,7 @@ impl Field {
     pub fn picker(self) -> Option<Picker> {
         match self {
             Field::Mode => Some(Picker::Mode),
-            Field::Output => Some(Picker::Output),
+            Field::Run => Some(Picker::Run),
             _ => None,
         }
     }
@@ -85,10 +85,10 @@ impl Field {
 
 /// How hard the unit is allowed to run. Eco caps its draw and Powerful lifts
 /// it, and the protocol won't hold both — `set_powerful` clears econo and
-/// `set_econo` clears powerful. Three rows that silently switch each other off
+/// `set_econo` clears powerful. Two rows that silently switch each other off
 /// is worse than one row with three values, so this is one row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Output {
+pub enum Run {
     Normal,
     Eco,
     Powerful,
@@ -96,27 +96,27 @@ pub enum Output {
 
 /// The order each picker lays its icons out, top to bottom.
 pub const MODES: [Mode; 5] = [Mode::Auto, Mode::Cool, Mode::Heat, Mode::Dry, Mode::Fan];
-pub const OUTPUTS: [Output; 3] = [Output::Normal, Output::Eco, Output::Powerful];
+pub const RUNS: [Run; 3] = [Run::Normal, Run::Eco, Run::Powerful];
 
 /// The rows that open a full-screen list of icons instead of changing in place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Picker {
     Mode,
-    Output,
+    Run,
 }
 
 impl Picker {
     pub fn title(self) -> &'static CStr {
         match self {
             Picker::Mode => c"Mode",
-            Picker::Output => c"Output",
+            Picker::Run => c"Run",
         }
     }
 
     pub fn len(self) -> usize {
         match self {
             Picker::Mode => MODES.len(),
-            Picker::Output => OUTPUTS.len(),
+            Picker::Run => RUNS.len(),
         }
     }
 
@@ -131,10 +131,11 @@ impl Picker {
                 // The tower fan's icon does for fan-only mode too.
                 Mode::Fan => (&icons::FAN, c"Fan"),
             },
-            Picker::Output => match OUTPUTS[index] {
-                Output::Normal => (&icons::OUT_NORMAL, c"Normal"),
-                Output::Eco => (&icons::OUT_ECO, c"Eco"),
-                Output::Powerful => (&icons::OUT_POWERFUL, c"Powerful"),
+            Picker::Run => match RUNS[index] {
+                Run::Normal => (&icons::RUN_NORMAL, c"Normal"),
+                Run::Eco => (&icons::RUN_ECO, c"Eco"),
+                // `daikin` keeps IRremoteESP8266's name for it (Powerful).
+                Run::Powerful => (&icons::RUN_POWER, c"Power"),
             },
         }
     }
@@ -143,17 +144,17 @@ impl Picker {
     pub fn current(self, ac: &Daikin) -> usize {
         match self {
             Picker::Mode => MODES.iter().position(|m| *m == ac.mode()).unwrap_or(0),
-            Picker::Output => {
+            Picker::Run => {
                 // Powerful wins the read-back: the protocol can't hold both, so
                 // if its bit is set the econo bit is already clear.
-                let output = if ac.powerful() {
-                    Output::Powerful
+                let run = if ac.powerful() {
+                    Run::Powerful
                 } else if ac.econo() {
-                    Output::Eco
+                    Run::Eco
                 } else {
-                    Output::Normal
+                    Run::Normal
                 };
-                OUTPUTS.iter().position(|o| *o == output).unwrap_or(0)
+                RUNS.iter().position(|r| *r == run).unwrap_or(0)
             }
         }
     }
@@ -161,14 +162,14 @@ impl Picker {
     fn apply(self, ac: &mut Daikin, index: usize) {
         match self {
             Picker::Mode => ac.set_mode(MODES[index]),
-            Picker::Output => match OUTPUTS[index] {
-                Output::Normal => {
+            Picker::Run => match RUNS[index] {
+                Run::Normal => {
                     ac.set_powerful(false);
                     ac.set_econo(false);
                 }
                 // Each setter already clears whatever it excludes.
-                Output::Eco => ac.set_econo(true),
-                Output::Powerful => ac.set_powerful(true),
+                Run::Eco => ac.set_econo(true),
+                Run::Powerful => ac.set_powerful(true),
             },
         }
     }
@@ -328,7 +329,7 @@ impl AcState {
         let ac = &mut self.daikin;
         match self.field {
             // Handled by a picker; `sends` never routes these here.
-            Field::Mode | Field::Output => return,
+            Field::Mode | Field::Run => return,
             Field::Temp => {
                 let temp = if forward {
                     (ac.temp() + 1).min(MAX_TEMP)

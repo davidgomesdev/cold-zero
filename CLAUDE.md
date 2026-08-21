@@ -57,9 +57,9 @@ Inside a device, keys are dispatched per screen:
 Two rows have named values rather than a number or a flag, so instead of cycling blind they open a picker with an icon per option (`AcState::menu`, `Picker`). Back closes the picker before it closes the screen.
 
 - **Mode** — auto, cool, heat, dry, fan.
-- **Output** — normal, eco, powerful. This one exists because the protocol won't hold eco and powerful at once (`set_powerful` clears econo, `set_econo` clears powerful). As two flag rows they silently switched each other off; as one row with three values the exclusion is the shape of the control rather than a surprise.
+- **Run** — normal, eco, power. This one exists because the protocol won't hold eco and powerful at once (`set_powerful` clears econo, `set_econo` clears powerful). As two flag rows they silently switched each other off; as one row with three values the exclusion is the shape of the control rather than a surprise.
 
-Quiet stays its own flag row: eco and quiet *can* both be on, so folding quiet into Output would lose a valid combination. Powerful does still clear quiet, which is the one cross-row effect left.
+Quiet stays its own flag row: eco and quiet *can* both be on, so folding quiet into Run would lose a valid combination. Powerful does still clear quiet, which is the one cross-row effect left.
 
 The daytime heater automation still only fires while the Heater screen is open, so with the A/C as the opening screen it will not run unless you navigate there.
 
