@@ -13,7 +13,8 @@ use flipperzero::storage::{File, Storage};
 use flipperzero::{info, warn};
 use flipperzero_sys::{
     InputKey, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputType,
-    InputTypeLong, InputTypeShort, storage_common_mkdir,
+    InputTypeLong, InputTypePress, InputTypeRelease, InputTypeRepeat, InputTypeShort,
+    storage_common_mkdir,
 };
 
 /// Where the remembered state lives. `/ext/apps_data` is always there; the
@@ -70,6 +71,13 @@ impl Field {
             // run after shutdown, not anything about mould you can see.
             Field::Clean => c"Clean",
         }
+    }
+
+    /// Rows worth holding an arrow on. A flag has nothing to run through --
+    /// repeating it would just toggle at 10Hz and land wherever the release
+    /// happened to fall.
+    pub fn repeats(self) -> bool {
+        matches!(self, Field::Temp | Field::Fan)
     }
 
     /// Rows whose values are named rather than numeric or on/off. They open a
@@ -180,6 +188,12 @@ pub struct AcState {
     pub field: Field,
     /// The open picker and where its cursor sits, or `None` while none is open.
     pub menu: Option<(Picker, usize)>,
+    /// Set while a held arrow is running through a row's values. The steps are
+    /// applied locally and one frame goes out on release: every Daikin frame
+    /// carries the whole state, so only the last one matters, and a send blocks
+    /// for ~400ms -- transmitting per step would leave the display seconds
+    /// behind the key.
+    repeating: bool,
 }
 
 impl Default for AcState {
@@ -188,6 +202,7 @@ impl Default for AcState {
             daikin: Daikin::default(),
             field: Field::Mode,
             menu: None,
+            repeating: false,
         }
     }
 }
@@ -250,9 +265,17 @@ impl AcState {
             None => match key {
                 // Tap toggles power, hold resends; both transmit everything.
                 InputKeyOk => type_ == InputTypeShort || type_ == InputTypeLong,
-                // A picker row opens rather than transmitting.
                 InputKeyLeft | InputKeyRight => {
-                    self.field.picker().is_none() && type_ == InputTypeShort
+                    if self.field.picker().is_some() {
+                        // A picker row opens rather than transmitting.
+                        false
+                    } else if type_ == InputTypeShort {
+                        true
+                    } else {
+                        // The single frame for a whole held run goes out when
+                        // the key comes back up.
+                        type_ == InputTypeRelease && self.repeating
+                    }
                 }
                 _ => false,
             },
@@ -261,26 +284,49 @@ impl AcState {
 
     /// The presses that only move a cursor around.
     #[allow(non_upper_case_globals)]
-    pub fn navigate(&mut self, key: InputKey) {
+    pub fn navigate(&mut self, key: InputKey, type_: InputType) {
+        // Every press starts here, so it is the one place guaranteed to run
+        // before a hold begins. Without it a run abandoned by some other key
+        // would leave the flag set and make the next release transmit.
+        if type_ == InputTypePress {
+            self.repeating = false;
+            return;
+        }
+
         if self.menu.is_some() {
-            match key {
-                InputKeyUp => self.menu_step(false),
-                InputKeyDown => self.menu_step(true),
-                _ => {}
+            if type_ == InputTypeShort {
+                match key {
+                    InputKeyUp => self.menu_step(false),
+                    InputKeyDown => self.menu_step(true),
+                    _ => {}
+                }
             }
             return;
         }
 
-        match key {
-            InputKeyUp => self.move_cursor(false),
-            InputKeyDown => self.move_cursor(true),
-            // Only a picker row gets here; `sends` routed the others away.
-            InputKeyLeft | InputKeyRight => {
-                if let Some(picker) = self.field.picker() {
-                    self.menu = Some((picker, picker.current(&self.daikin)));
-                }
+        if key == InputKeyUp || key == InputKeyDown {
+            if type_ == InputTypeShort {
+                self.move_cursor(key == InputKeyDown);
             }
-            _ => {}
+            return;
+        }
+
+        if key != InputKeyLeft && key != InputKeyRight {
+            return;
+        }
+
+        if type_ == InputTypeShort {
+            // Only a picker row gets here; `sends` routed the others away.
+            if let Some(picker) = self.field.picker() {
+                self.menu = Some((picker, picker.current(&self.daikin)));
+            }
+            return;
+        }
+
+        // A held arrow: Long is the first step of the run, Repeat the rest.
+        if (type_ == InputTypeLong || type_ == InputTypeRepeat) && self.field.repeats() {
+            self.step(key == InputKeyRight);
+            self.repeating = true;
         }
     }
 
@@ -323,7 +369,21 @@ impl AcState {
     }
 
     /// Left/Right change the selected row and put the new state on the air.
-    pub fn adjust(&mut self, forward: bool) {
+    pub fn adjust(&mut self, forward: bool, type_: InputType) {
+        // The end of a held run: the steps have already been applied, so this
+        // only has to put the result on the air.
+        if type_ == InputTypeRelease {
+            self.repeating = false;
+            self.send();
+            return;
+        }
+
+        self.step(forward);
+        self.send();
+    }
+
+    /// Change the selected row by one, without transmitting.
+    fn step(&mut self, forward: bool) {
         info!("A/C: adjusting a setting");
 
         let ac = &mut self.daikin;
@@ -354,8 +414,6 @@ impl AcState {
             Field::Presence => ac.set_sensor(!ac.sensor()),
             Field::Clean => ac.set_mold(!ac.mold()),
         }
-
-        self.send();
     }
 
     pub fn toggle_power(&mut self) {

@@ -231,10 +231,8 @@ fn handle_key_presses(
         };
 
         if !sends {
-            if app_state.active_device == ActiveDevice::Ac
-                && input_event.type_ == InputTypeShort
-            {
-                app_state.ac_state.navigate(input_event.key);
+            if app_state.active_device == ActiveDevice::Ac {
+                app_state.ac_state.navigate(input_event.key, input_event.type_);
             } else {
                 debug!("Received input that is not handled ({})", input_event.key.0);
             }
@@ -365,11 +363,9 @@ fn handle_ac_ok_press(app_state: &mut AppState, input_event: InputEvent) {
 /// Left/Right change the selected row. Every change retransmits the whole
 /// state, because that is all the Daikin protocol can say.
 fn handle_ac_control(app_state: &mut AppState, input_event: InputEvent) {
-    if input_event.type_ != InputTypeShort {
-        return;
-    }
-
-    app_state.ac_state.adjust(input_event.key == InputKeyRight);
+    app_state
+        .ac_state
+        .adjust(input_event.key == InputKeyRight, input_event.type_);
 }
 
 #[allow(non_upper_case_globals)]
