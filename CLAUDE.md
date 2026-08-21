@@ -47,7 +47,7 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power · long: resend state (both send all 35 bytes) · in the mode picker: pick | move the cursor down the settings list, or through the mode picker | change the selected setting, or open the mode picker on the Mode row |
+| A/C | short: power · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list, or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp and Fan |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
@@ -58,6 +58,8 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 
 - **Mode** — auto, cool, heat, dry, fan.
 - **Run** — normal, eco, power. This one exists because the protocol won't hold eco and powerful at once (`set_powerful` clears econo, `set_econo` clears powerful). As two flag rows they silently switched each other off; as one row with three values the exclusion is the shape of the control rather than a surprise.
+
+Holding Left or Right runs through the Temp and Fan values. The steps are applied locally and a *single* frame goes out on release (`AcState::repeating`) — every Daikin frame carries the whole state, so only the last one matters, and one send blocks for ~400ms, which would leave the display seconds behind the key. Flag rows don't repeat: there is nothing to run through, and toggling at the repeat rate lands wherever the release happens to fall.
 
 Quiet stays its own flag row: eco and quiet *can* both be on, so folding quiet into Run would lose a valid combination. Powerful does still clear quiet, which is the one cross-row effect left.
 
