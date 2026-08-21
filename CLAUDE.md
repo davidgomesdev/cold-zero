@@ -47,7 +47,7 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power · long: resend state | move the cursor down the settings list | change the selected setting |
+| A/C | short: power · long: resend state (both send all 35 bytes) | move the cursor down the settings list | change the selected setting |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |

@@ -30,7 +30,7 @@ pub enum Field {
     Econo,
     Comfort,
     Sensor,
-    Mold,
+    Clean,
 }
 
 pub const FIELDS: [Field; 11] = [
@@ -44,7 +44,7 @@ pub const FIELDS: [Field; 11] = [
     Field::Econo,
     Field::Comfort,
     Field::Sensor,
-    Field::Mold,
+    Field::Clean,
 ];
 
 impl Field {
@@ -60,7 +60,10 @@ impl Field {
             Field::Econo => c"Econo",
             Field::Comfort => c"Comfort",
             Field::Sensor => c"Eye",
-            Field::Mold => c"Mold",
+            // `daikin` keeps IRremoteESP8266's name for it (Mould); "Clean"
+            // is what the row says, because the option is the internal-dry
+            // run after shutdown, not anything about mould you can see.
+            Field::Clean => c"Clean",
         }
     }
 }
@@ -174,7 +177,7 @@ impl AcState {
             Field::Econo => ac.set_econo(!ac.econo()),
             Field::Comfort => ac.set_comfort(!ac.comfort()),
             Field::Sensor => ac.set_sensor(!ac.sensor()),
-            Field::Mold => ac.set_mold(!ac.mold()),
+            Field::Clean => ac.set_mold(!ac.mold()),
         }
 
         self.send();
@@ -235,7 +238,7 @@ impl AcState {
             Field::Econo => Some(ac.econo()),
             Field::Comfort => Some(ac.comfort()),
             Field::Sensor => Some(ac.sensor()),
-            Field::Mold => Some(ac.mold()),
+            Field::Clean => Some(ac.mold()),
             _ => None,
         }
     }
