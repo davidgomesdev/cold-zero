@@ -304,8 +304,10 @@ impl AcState {
             return;
         }
 
+        // Walking the list repeats too. A tap emits Short, a hold emits Long
+        // then Repeats, so the two never both fire for one press.
         if key == InputKeyUp || key == InputKeyDown {
-            if type_ == InputTypeShort {
+            if type_ == InputTypeShort || type_ == InputTypeLong || type_ == InputTypeRepeat {
                 self.move_cursor(key == InputKeyDown);
             }
             return;
@@ -336,6 +338,9 @@ impl AcState {
         self.menu.take().is_some()
     }
 
+    /// Tap-only, deliberately: these rings are three and five long, so holding
+    /// an arrow would spin through them faster than you could stop on one. The
+    /// settings list can repeat because it clamps at its ends.
     fn menu_step(&mut self, down: bool) {
         let Some((picker, index)) = self.menu else { return };
         let index = if down {
@@ -356,8 +361,10 @@ impl AcState {
         self.send();
     }
 
-    /// Up/Down walk the rows. No wrap-around: with eleven rows on one screen,
-    /// stopping at the ends is less surprising than jumping across.
+    /// Up/Down walk the rows, and repeat while held. No wrap-around: with the
+    /// whole list on one screen, stopping at the ends is less surprising than
+    /// jumping across, and it is what makes holding Down mean "go to the
+    /// bottom" rather than "spin".
     pub fn move_cursor(&mut self, down: bool) {
         let index = FIELDS.iter().position(|f| *f == self.field).unwrap_or(0);
         let index = if down {
