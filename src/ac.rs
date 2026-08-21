@@ -32,7 +32,7 @@ pub enum Field {
     Quiet,
     Econo,
     Comfort,
-    Sensor,
+    Presence,
     Clean,
 }
 
@@ -40,15 +40,15 @@ pub const FIELDS: [Field; 11] = [
     Field::Mode,
     Field::Temp,
     Field::Fan,
-    // The three that get used often enough to want them near the top.
+    // The ones that get used often enough to want them near the top.
     Field::Comfort,
     Field::Clean,
     Field::Quiet,
+    Field::Econo,
     Field::SwingV,
     Field::SwingH,
     Field::Powerful,
-    Field::Econo,
-    Field::Sensor,
+    Field::Presence,
 ];
 
 impl Field {
@@ -61,9 +61,12 @@ impl Field {
             Field::SwingH => c"Swing H",
             Field::Powerful => c"Powerful",
             Field::Quiet => c"Quiet",
-            Field::Econo => c"Econo",
+            Field::Econo => c"Eco",
             Field::Comfort => c"Comfort",
-            Field::Sensor => c"Eye",
+            // `daikin` keeps IRremoteESP8266's name for it (Sensor); the
+            // remote calls it Intelligent Eye, and what it actually does is
+            // notice whether anyone is in the room.
+            Field::Presence => c"Presence",
             // `daikin` keeps IRremoteESP8266's name for it (Mould); "Clean"
             // is what the row says, because the option is the internal-dry
             // run after shutdown, not anything about mould you can see.
@@ -252,7 +255,7 @@ impl AcState {
             Field::Quiet => ac.set_quiet(!ac.quiet()),
             Field::Econo => ac.set_econo(!ac.econo()),
             Field::Comfort => ac.set_comfort(!ac.comfort()),
-            Field::Sensor => ac.set_sensor(!ac.sensor()),
+            Field::Presence => ac.set_sensor(!ac.sensor()),
             Field::Clean => ac.set_mold(!ac.mold()),
         }
 
@@ -313,7 +316,7 @@ impl AcState {
             Field::Quiet => Some(ac.quiet()),
             Field::Econo => Some(ac.econo()),
             Field::Comfort => Some(ac.comfort()),
-            Field::Sensor => Some(ac.sensor()),
+            Field::Presence => Some(ac.sensor()),
             Field::Clean => Some(ac.mold()),
             _ => None,
         }
