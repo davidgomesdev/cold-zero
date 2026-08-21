@@ -464,7 +464,9 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
             // Bumped by ir_press_button, so the dots step once per frame sent
             let frame = ir::send_count() as usize % CHANGING.len();
             let y = if app_state.active_device == ActiveDevice::Ac {
-                AC_HEIGHT
+                // Clear of the bottom edge: the baseline has to leave room for
+                // the descender in "Changing".
+                AC_HEIGHT - 4
             } else {
                 50
             };
@@ -590,14 +592,22 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                 }
                 _ => c"".as_ptr(),
             };
-            canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, value);
+            // Mode is the only row that opens a submenu rather than changing
+            // in place, so it says so.
+            let value_x = if *field == Field::Mode {
+                canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, c">".as_ptr());
+                AC_WIDTH - 5
+            } else {
+                AC_WIDTH
+            };
+            canvas_draw_str_aligned(canvas, value_x, y, AlignRight, AlignBottom, value);
 
             canvas_set_color(canvas, ColorBlack);
         }
     }
 }
 
-unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
+unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) { unsafe {
     draw_title(canvas, c"Heater");
 
     let status = match app_state.run_state {
@@ -631,14 +641,14 @@ unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
         c"OK:on Hold:day".as_ptr()
     };
     draw_hints(canvas, hints);
-}
+}}
 
-unsafe fn draw_time(canvas: *mut Canvas) {
+unsafe fn draw_time(canvas: *mut Canvas) { unsafe {
     let time_str = get_time_label();
     canvas_draw_str_aligned(canvas, 0, SCREEN_HEIGHT, AlignLeft, AlignBottom, time_str.as_ptr());
-}
+}}
 
-unsafe fn draw_title(canvas: *mut Canvas, title: &CStr) {
+unsafe fn draw_title(canvas: *mut Canvas, title: &CStr) { unsafe {
     canvas_draw_str_aligned(
         canvas,
         SCREEN_WIDTH / 2,
@@ -647,9 +657,9 @@ unsafe fn draw_title(canvas: *mut Canvas, title: &CStr) {
         AlignTop,
         title.as_ptr(),
     );
-}
+}}
 
-unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
+unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) { unsafe {
     draw_title(canvas, c"Fan");
 
     if app_state.fan_state.is_on {
@@ -706,9 +716,9 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
         c"OK:on Hold:all".as_ptr()
     };
     draw_hints(canvas, hints);
-}
+}}
 
-unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) {
+unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) { unsafe {
     draw_title(canvas, c"Bulbs");
 
     canvas_draw_str(canvas, 0, 20, c"Escrit\xf3rio:".as_ptr());
@@ -735,13 +745,13 @@ unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) {
         c"U:Esc D:Qua OK:on".as_ptr()
     };
     draw_hints(canvas, hints);
-}
+}}
 
 fn on_off(on: bool) -> *const c_char {
     if on { c"ON".as_ptr() } else { c"OFF".as_ptr() }
 }
 
-unsafe fn draw_hints(canvas: *mut Canvas, hints: *const c_char) {
+unsafe fn draw_hints(canvas: *mut Canvas, hints: *const c_char) { unsafe {
     canvas_draw_str_aligned(
         canvas,
         SCREEN_WIDTH,
@@ -750,7 +760,7 @@ unsafe fn draw_hints(canvas: *mut Canvas, hints: *const c_char) {
         AlignBottom,
         hints,
     );
-}
+}}
 
 fn get_time_label() -> String {
     let time = datetime();
