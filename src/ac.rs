@@ -10,7 +10,10 @@ use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::io::{Read, Write};
 use flipperzero::storage::{File, Storage};
 use flipperzero::{info, warn};
-use flipperzero_sys::storage_common_mkdir;
+use flipperzero_sys::{
+    InputKey, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputType,
+    InputTypeLong, InputTypeShort, storage_common_mkdir,
+};
 
 /// Where the remembered state lives. `/ext/apps_data` is always there; the
 /// per-app directory under it may not be, so saving creates it.
@@ -68,9 +71,16 @@ impl Field {
     }
 }
 
+/// The order the mode picker lays its icons out, top to bottom.
+pub const MODES: [Mode; 5] = [Mode::Auto, Mode::Cool, Mode::Heat, Mode::Dry, Mode::Fan];
+
 pub struct AcState {
     pub daikin: Daikin,
     pub field: Field,
+    /// The cursor inside the mode picker, or `None` while it is closed. Mode is
+    /// the one setting with five named values rather than a number or a flag,
+    /// so it gets a picker with icons instead of a blind left/right cycle.
+    pub mode_menu: Option<Mode>,
 }
 
 impl Default for AcState {
@@ -78,6 +88,7 @@ impl Default for AcState {
         AcState {
             daikin: Daikin::default(),
             field: Field::Mode,
+            mode_menu: None,
         }
     }
 }
@@ -127,6 +138,76 @@ impl AcState {
         }
     }
 
+    /// Whether a press will put a frame on the air. The caller needs to know
+    /// *before* dispatching it, because a send blocks for the whole frame and
+    /// the screen has to paint "Changing..." first. Keeping the answer next to
+    /// the handlers is what stops the two drifting apart.
+    #[allow(non_upper_case_globals)]
+    pub fn sends(&self, key: InputKey, type_: InputType) -> bool {
+        match self.mode_menu {
+            // In the picker only a tap on OK commits. Holding it would
+            // otherwise fall through to the power toggle.
+            Some(_) => key == InputKeyOk && type_ == InputTypeShort,
+            None => match key {
+                // Tap toggles power, hold resends; both transmit everything.
+                InputKeyOk => type_ == InputTypeShort || type_ == InputTypeLong,
+                // The Mode row opens the picker rather than transmitting.
+                InputKeyLeft | InputKeyRight => {
+                    self.field != Field::Mode && type_ == InputTypeShort
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// The presses that only move a cursor around.
+    #[allow(non_upper_case_globals)]
+    pub fn navigate(&mut self, key: InputKey) {
+        if self.mode_menu.is_some() {
+            match key {
+                InputKeyUp => self.menu_step(false),
+                InputKeyDown => self.menu_step(true),
+                _ => {}
+            }
+            return;
+        }
+
+        match key {
+            InputKeyUp => self.move_cursor(false),
+            InputKeyDown => self.move_cursor(true),
+            // Only the Mode row gets here; `sends` routed the other rows away.
+            InputKeyLeft | InputKeyRight => self.mode_menu = Some(self.daikin.mode()),
+            _ => {}
+        }
+    }
+
+    /// Back inside the picker closes it rather than leaving the screen.
+    /// Returns whether there was a picker to close.
+    pub fn close_menu(&mut self) -> bool {
+        self.mode_menu.take().is_some()
+    }
+
+    fn menu_step(&mut self, down: bool) {
+        let Some(mode) = self.mode_menu else { return };
+        let index = MODES.iter().position(|m| *m == mode).unwrap_or(0);
+        let index = if down {
+            (index + 1) % MODES.len()
+        } else {
+            (index + MODES.len() - 1) % MODES.len()
+        };
+        self.mode_menu = Some(MODES[index]);
+    }
+
+    /// OK in the picker: take the highlighted mode, close, transmit.
+    pub fn commit_mode(&mut self) {
+        let Some(mode) = self.mode_menu.take() else {
+            return;
+        };
+        info!("A/C: picking a mode");
+        self.daikin.set_mode(mode);
+        self.send();
+    }
+
     /// Up/Down walk the rows. No wrap-around: with eleven rows on one screen,
     /// stopping at the ends is less surprising than jumping across.
     pub fn move_cursor(&mut self, down: bool) {
@@ -145,14 +226,8 @@ impl AcState {
 
         let ac = &mut self.daikin;
         match self.field {
-            Field::Mode => {
-                let mode = if forward {
-                    ac.mode().next()
-                } else {
-                    ac.mode().prev()
-                };
-                ac.set_mode(mode);
-            }
+            // Handled by the picker; `sends` never routes it here.
+            Field::Mode => return,
             Field::Temp => {
                 let temp = if forward {
                     (ac.temp() + 1).min(MAX_TEMP)

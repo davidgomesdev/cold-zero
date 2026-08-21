@@ -47,12 +47,14 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power · long: resend state (both send all 35 bytes) | move the cursor down the settings list | change the selected setting |
+| A/C | short: power · long: resend state (both send all 35 bytes) · in the mode picker: pick | move the cursor down the settings list, or through the mode picker | change the selected setting, or open the mode picker on the Mode row |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
 
-`key_sends` decides which of those actually transmit; everything else (home navigation, walking the A/C list) skips the blue blink and the "Changing..." overlay.
+`key_sends` decides which of those actually transmit; everything else (home navigation, walking the A/C list) skips the blue blink and the "Changing..." overlay. The A/C answers for itself through `AcState::sends`, because there it depends on the selected row and on whether the mode picker is open — that predicate lives next to the handlers it describes so the two can't drift apart.
+
+Mode is the one setting with five named values rather than a number or a flag, so it opens a picker with an icon each (`AcState::mode_menu`) instead of cycling blind. Back closes the picker before it closes the screen.
 
 The daytime heater automation still only fires while the Heater screen is open, so with the A/C as the opening screen it will not run unless you navigate there.
 
