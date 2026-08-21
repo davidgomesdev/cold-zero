@@ -190,12 +190,17 @@ fn handle_key_presses(
     unsafe {
         let input_event = *input_event;
 
-        // Back is the only key with the same meaning everywhere: tap for the
-        // home screen, hold to quit.
+        // Back means the same thing everywhere: leave whatever you're in.
         if input_event.key == InputKeyBack {
             match input_event.type_ {
+                // Holding quits from anywhere, including mid-screen.
                 InputTypeLong => return false,
+                // A tap backs out one level. On the home screen there is no
+                // level left, so it leaves the app.
                 InputTypeShort => {
+                    if !app_state.in_device {
+                        return false;
+                    }
                     app_state.in_device = false;
                     apply_orientation(view_port, app_state);
                 }
@@ -540,7 +545,7 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                 AC_HEIGHT,
                 AlignCenter,
                 AlignBottom,
-                c"OK:pwr hOK:send".as_ptr(),
+                c"OK: Power>Sync".as_ptr(),
             );
         }
     }
