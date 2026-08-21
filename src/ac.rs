@@ -5,6 +5,7 @@
 //! does. See [`crate::daikin`] for the wire format.
 
 use crate::daikin::{Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode, STATE_LEN};
+use crate::icons;
 use core::ffi::CStr;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::io::{Read, Write};
@@ -28,15 +29,14 @@ pub enum Field {
     Fan,
     SwingV,
     SwingH,
-    Powerful,
+    Output,
     Quiet,
-    Econo,
     Comfort,
     Presence,
     Clean,
 }
 
-pub const FIELDS: [Field; 11] = [
+pub const FIELDS: [Field; 10] = [
     Field::Mode,
     Field::Temp,
     Field::Fan,
@@ -44,10 +44,9 @@ pub const FIELDS: [Field; 11] = [
     Field::Comfort,
     Field::Clean,
     Field::Quiet,
-    Field::Econo,
+    Field::Output,
     Field::SwingV,
     Field::SwingH,
-    Field::Powerful,
     Field::Presence,
 ];
 
@@ -59,9 +58,8 @@ impl Field {
             Field::Fan => c"Fan",
             Field::SwingV => c"Swing V",
             Field::SwingH => c"Swing H",
-            Field::Powerful => c"Powerful",
+            Field::Output => c"Output",
             Field::Quiet => c"Quiet",
-            Field::Econo => c"Eco",
             Field::Comfort => c"Comfort",
             // `daikin` keeps IRremoteESP8266's name for it (Sensor); the
             // remote calls it Intelligent Eye, and what it actually does is
@@ -73,18 +71,114 @@ impl Field {
             Field::Clean => c"Clean",
         }
     }
+
+    /// Rows whose values are named rather than numeric or on/off. They open a
+    /// picker; everything else changes in place.
+    pub fn picker(self) -> Option<Picker> {
+        match self {
+            Field::Mode => Some(Picker::Mode),
+            Field::Output => Some(Picker::Output),
+            _ => None,
+        }
+    }
 }
 
-/// The order the mode picker lays its icons out, top to bottom.
+/// How hard the unit is allowed to run. Eco caps its draw and Powerful lifts
+/// it, and the protocol won't hold both — `set_powerful` clears econo and
+/// `set_econo` clears powerful. Three rows that silently switch each other off
+/// is worse than one row with three values, so this is one row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Output {
+    Normal,
+    Eco,
+    Powerful,
+}
+
+/// The order each picker lays its icons out, top to bottom.
 pub const MODES: [Mode; 5] = [Mode::Auto, Mode::Cool, Mode::Heat, Mode::Dry, Mode::Fan];
+pub const OUTPUTS: [Output; 3] = [Output::Normal, Output::Eco, Output::Powerful];
+
+/// The rows that open a full-screen list of icons instead of changing in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Picker {
+    Mode,
+    Output,
+}
+
+impl Picker {
+    pub fn title(self) -> &'static CStr {
+        match self {
+            Picker::Mode => c"Mode",
+            Picker::Output => c"Output",
+        }
+    }
+
+    pub fn len(self) -> usize {
+        match self {
+            Picker::Mode => MODES.len(),
+            Picker::Output => OUTPUTS.len(),
+        }
+    }
+
+    /// The icon and name for one row of the picker.
+    pub fn option(self, index: usize) -> (&'static [u8; 32], &'static CStr) {
+        match self {
+            Picker::Mode => match MODES[index] {
+                Mode::Auto => (&icons::MODE_AUTO, c"Auto"),
+                Mode::Cool => (&icons::MODE_COOL, c"Cool"),
+                Mode::Heat => (&icons::MODE_HEAT, c"Heat"),
+                Mode::Dry => (&icons::MODE_DRY, c"Dry"),
+                // The tower fan's icon does for fan-only mode too.
+                Mode::Fan => (&icons::FAN, c"Fan"),
+            },
+            Picker::Output => match OUTPUTS[index] {
+                Output::Normal => (&icons::OUT_NORMAL, c"Normal"),
+                Output::Eco => (&icons::OUT_ECO, c"Eco"),
+                Output::Powerful => (&icons::OUT_POWERFUL, c"Powerful"),
+            },
+        }
+    }
+
+    /// Where the picker opens: on whatever is in effect now.
+    pub fn current(self, ac: &Daikin) -> usize {
+        match self {
+            Picker::Mode => MODES.iter().position(|m| *m == ac.mode()).unwrap_or(0),
+            Picker::Output => {
+                // Powerful wins the read-back: the protocol can't hold both, so
+                // if its bit is set the econo bit is already clear.
+                let output = if ac.powerful() {
+                    Output::Powerful
+                } else if ac.econo() {
+                    Output::Eco
+                } else {
+                    Output::Normal
+                };
+                OUTPUTS.iter().position(|o| *o == output).unwrap_or(0)
+            }
+        }
+    }
+
+    fn apply(self, ac: &mut Daikin, index: usize) {
+        match self {
+            Picker::Mode => ac.set_mode(MODES[index]),
+            Picker::Output => match OUTPUTS[index] {
+                Output::Normal => {
+                    ac.set_powerful(false);
+                    ac.set_econo(false);
+                }
+                // Each setter already clears whatever it excludes.
+                Output::Eco => ac.set_econo(true),
+                Output::Powerful => ac.set_powerful(true),
+            },
+        }
+    }
+}
 
 pub struct AcState {
     pub daikin: Daikin,
     pub field: Field,
-    /// The cursor inside the mode picker, or `None` while it is closed. Mode is
-    /// the one setting with five named values rather than a number or a flag,
-    /// so it gets a picker with icons instead of a blind left/right cycle.
-    pub mode_menu: Option<Mode>,
+    /// The open picker and where its cursor sits, or `None` while none is open.
+    pub menu: Option<(Picker, usize)>,
 }
 
 impl Default for AcState {
@@ -92,7 +186,7 @@ impl Default for AcState {
         AcState {
             daikin: Daikin::default(),
             field: Field::Mode,
-            mode_menu: None,
+            menu: None,
         }
     }
 }
@@ -148,16 +242,16 @@ impl AcState {
     /// the handlers is what stops the two drifting apart.
     #[allow(non_upper_case_globals)]
     pub fn sends(&self, key: InputKey, type_: InputType) -> bool {
-        match self.mode_menu {
-            // In the picker only a tap on OK commits. Holding it would
+        match self.menu {
+            // In a picker only a tap on OK commits. Holding it would
             // otherwise fall through to the power toggle.
             Some(_) => key == InputKeyOk && type_ == InputTypeShort,
             None => match key {
                 // Tap toggles power, hold resends; both transmit everything.
                 InputKeyOk => type_ == InputTypeShort || type_ == InputTypeLong,
-                // The Mode row opens the picker rather than transmitting.
+                // A picker row opens rather than transmitting.
                 InputKeyLeft | InputKeyRight => {
-                    self.field != Field::Mode && type_ == InputTypeShort
+                    self.field.picker().is_none() && type_ == InputTypeShort
                 }
                 _ => false,
             },
@@ -167,7 +261,7 @@ impl AcState {
     /// The presses that only move a cursor around.
     #[allow(non_upper_case_globals)]
     pub fn navigate(&mut self, key: InputKey) {
-        if self.mode_menu.is_some() {
+        if self.menu.is_some() {
             match key {
                 InputKeyUp => self.menu_step(false),
                 InputKeyDown => self.menu_step(true),
@@ -179,36 +273,39 @@ impl AcState {
         match key {
             InputKeyUp => self.move_cursor(false),
             InputKeyDown => self.move_cursor(true),
-            // Only the Mode row gets here; `sends` routed the other rows away.
-            InputKeyLeft | InputKeyRight => self.mode_menu = Some(self.daikin.mode()),
+            // Only a picker row gets here; `sends` routed the others away.
+            InputKeyLeft | InputKeyRight => {
+                if let Some(picker) = self.field.picker() {
+                    self.menu = Some((picker, picker.current(&self.daikin)));
+                }
+            }
             _ => {}
         }
     }
 
-    /// Back inside the picker closes it rather than leaving the screen.
+    /// Back inside a picker closes it rather than leaving the screen.
     /// Returns whether there was a picker to close.
     pub fn close_menu(&mut self) -> bool {
-        self.mode_menu.take().is_some()
+        self.menu.take().is_some()
     }
 
     fn menu_step(&mut self, down: bool) {
-        let Some(mode) = self.mode_menu else { return };
-        let index = MODES.iter().position(|m| *m == mode).unwrap_or(0);
+        let Some((picker, index)) = self.menu else { return };
         let index = if down {
-            (index + 1) % MODES.len()
+            (index + 1) % picker.len()
         } else {
-            (index + MODES.len() - 1) % MODES.len()
+            (index + picker.len() - 1) % picker.len()
         };
-        self.mode_menu = Some(MODES[index]);
+        self.menu = Some((picker, index));
     }
 
-    /// OK in the picker: take the highlighted mode, close, transmit.
-    pub fn commit_mode(&mut self) {
-        let Some(mode) = self.mode_menu.take() else {
+    /// OK in a picker: apply the highlighted option, close, transmit.
+    pub fn commit_menu(&mut self) {
+        let Some((picker, index)) = self.menu.take() else {
             return;
         };
-        info!("A/C: picking a mode");
-        self.daikin.set_mode(mode);
+        info!("A/C: picking an option");
+        picker.apply(&mut self.daikin, index);
         self.send();
     }
 
@@ -230,8 +327,8 @@ impl AcState {
 
         let ac = &mut self.daikin;
         match self.field {
-            // Handled by the picker; `sends` never routes it here.
-            Field::Mode => return,
+            // Handled by a picker; `sends` never routes these here.
+            Field::Mode | Field::Output => return,
             Field::Temp => {
                 let temp = if forward {
                     (ac.temp() + 1).min(MAX_TEMP)
@@ -251,9 +348,7 @@ impl AcState {
             // The rest are flags, so either direction is just a toggle.
             Field::SwingV => ac.set_swing_vertical(!ac.swing_vertical()),
             Field::SwingH => ac.set_swing_horizontal(!ac.swing_horizontal()),
-            Field::Powerful => ac.set_powerful(!ac.powerful()),
             Field::Quiet => ac.set_quiet(!ac.quiet()),
-            Field::Econo => ac.set_econo(!ac.econo()),
             Field::Comfort => ac.set_comfort(!ac.comfort()),
             Field::Presence => ac.set_sensor(!ac.sensor()),
             Field::Clean => ac.set_mold(!ac.mold()),
@@ -283,14 +378,9 @@ impl AcState {
         self.save();
     }
 
-    pub fn mode_label(&self) -> &'static CStr {
-        match self.daikin.mode() {
-            Mode::Auto => c"Auto",
-            Mode::Cool => c"Cool",
-            Mode::Heat => c"Heat",
-            Mode::Dry => c"Dry",
-            Mode::Fan => c"Fan",
-        }
+    /// What a picker row shows on the list: the option currently in effect.
+    pub fn picker_label(&self, picker: Picker) -> &'static CStr {
+        picker.option(picker.current(&self.daikin)).1
     }
 
     pub fn fan_label(&self) -> &'static CStr {
@@ -312,9 +402,7 @@ impl AcState {
         match field {
             Field::SwingV => Some(ac.swing_vertical()),
             Field::SwingH => Some(ac.swing_horizontal()),
-            Field::Powerful => Some(ac.powerful()),
             Field::Quiet => Some(ac.quiet()),
-            Field::Econo => Some(ac.econo()),
             Field::Comfort => Some(ac.comfort()),
             Field::Presence => Some(ac.sensor()),
             Field::Clean => Some(ac.mold()),

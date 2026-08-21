@@ -15,8 +15,7 @@ mod ir;
 mod notification;
 mod state;
 
-use crate::ac::{FIELDS, Field, MODES};
-use crate::daikin::Mode;
+use crate::ac::{FIELDS, Field, Picker};
 use crate::bulbs::BulbsState;
 use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
@@ -351,8 +350,8 @@ fn handle_heater_ok_press(
 /// way back in sync after someone has used the physical remote.
 #[allow(non_upper_case_globals)]
 fn handle_ac_ok_press(app_state: &mut AppState, input_event: InputEvent) {
-    if app_state.ac_state.mode_menu.is_some() {
-        app_state.ac_state.commit_mode();
+    if app_state.ac_state.menu.is_some() {
+        app_state.ac_state.commit_menu();
         return;
     }
 
@@ -514,39 +513,38 @@ unsafe fn draw_home(canvas: *mut Canvas, app_state: &AppState) {
 }
 
 /// The A/C list, rendered sideways so all eleven settings fit at once.
-/// One mode row in the picker: 16px of icon plus its name.
-const MODE_ROW_HEIGHT: i32 = 21;
-const MODE_FIRST_ROW: i32 = 18;
+/// One option row in a picker: 16px of icon plus its name.
+const MENU_ROW_HEIGHT: i32 = 21;
+const MENU_FIRST_ROW: i32 = 18;
 
-/// The five modes with an icon each, replacing the settings list while it's
-/// open. Up/Down move, OK picks, Back closes.
-unsafe fn draw_mode_menu(canvas: *mut Canvas, ac: &AcState, selected: Mode) {
+/// A picker's options with an icon each, replacing the settings list while it
+/// is open. Up/Down move, OK picks, Back closes.
+unsafe fn draw_menu(canvas: *mut Canvas, ac: &AcState, picker: Picker, selected: usize) {
     unsafe {
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str_aligned(canvas, AC_WIDTH / 2, 0, AlignCenter, AlignTop, c"Mode".as_ptr());
+        canvas_draw_str_aligned(
+            canvas,
+            AC_WIDTH / 2,
+            0,
+            AlignCenter,
+            AlignTop,
+            picker.title().as_ptr(),
+        );
         canvas_set_font(canvas, FontSecondary);
 
-        for (index, mode) in MODES.iter().enumerate() {
-            let top = MODE_FIRST_ROW + index as i32 * MODE_ROW_HEIGHT;
-
-            let (icon, label) = match mode {
-                Mode::Auto => (&icons::MODE_AUTO, c"Auto"),
-                Mode::Cool => (&icons::MODE_COOL, c"Cool"),
-                Mode::Heat => (&icons::MODE_HEAT, c"Heat"),
-                Mode::Dry => (&icons::MODE_DRY, c"Dry"),
-                // The tower fan's icon does for fan-only mode too.
-                Mode::Fan => (&icons::FAN, c"Fan"),
-            };
+        for index in 0..picker.len() {
+            let top = MENU_FIRST_ROW + index as i32 * MENU_ROW_HEIGHT;
+            let (icon, label) = picker.option(index);
 
             canvas_draw_xbm(canvas, 5, top + 2, icons::SIZE, icons::SIZE, icon.as_ptr());
             canvas_draw_str_aligned(canvas, 27, top + 14, AlignLeft, AlignBottom, label.as_ptr());
 
-            // The current mode gets a dot, so the cursor isn't the only thing
-            // on screen and you can see what you'd be changing away from.
-            if *mode == ac.daikin.mode() {
+            // The option in effect gets a dot, so the cursor isn't the only
+            // thing on screen and you can see what you'd be changing away from.
+            if index == picker.current(&ac.daikin) {
                 canvas_draw_disc(canvas, AC_WIDTH - 6, top + 10, 2);
             }
-            if *mode == selected {
+            if index == selected {
                 canvas_draw_rframe(canvas, 1, top, AC_WIDTH as usize - 1, 20, 3);
             }
         }
@@ -556,8 +554,8 @@ unsafe fn draw_mode_menu(canvas: *mut Canvas, ac: &AcState, selected: Mode) {
 unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
     let ac = &app_state.ac_state;
 
-    if let Some(selected) = ac.mode_menu {
-        unsafe { draw_mode_menu(canvas, ac, selected) };
+    if let Some((picker, selected)) = ac.menu {
+        unsafe { draw_menu(canvas, ac, picker, selected) };
         return;
     }
 
@@ -581,20 +579,24 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
 
             canvas_draw_str_aligned(canvas, 1, y, AlignLeft, AlignBottom, field.label().as_ptr());
 
+            let picker = field.picker();
             let temp;
-            let value = match (field, ac.flag(*field)) {
-                (_, Some(on)) => on_off(on),
-                (Field::Mode, _) => ac.mode_label().as_ptr(),
-                (Field::Fan, _) => ac.fan_label().as_ptr(),
-                (Field::Temp, _) => {
-                    temp = format!("{}C\0", ac.daikin.temp());
-                    temp.as_ptr()
-                }
-                _ => c"".as_ptr(),
+            let value = match picker {
+                // A picker row shows whichever option is in effect.
+                Some(picker) => ac.picker_label(picker).as_ptr(),
+                None => match (field, ac.flag(*field)) {
+                    (_, Some(on)) => on_off(on),
+                    (Field::Fan, _) => ac.fan_label().as_ptr(),
+                    (Field::Temp, _) => {
+                        temp = format!("{}C\0", ac.daikin.temp());
+                        temp.as_ptr()
+                    }
+                    _ => c"".as_ptr(),
+                },
             };
-            // Mode is the only row that opens a submenu rather than changing
-            // in place, so it says so.
-            let value_x = if *field == Field::Mode {
+            // A picker row opens a submenu rather than changing in place, so
+            // it says so.
+            let value_x = if picker.is_some() {
                 canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, c">".as_ptr());
                 AC_WIDTH - 5
             } else {
