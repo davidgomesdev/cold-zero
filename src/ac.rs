@@ -40,14 +40,15 @@ pub const FIELDS: [Field; 11] = [
     Field::Mode,
     Field::Temp,
     Field::Fan,
+    // The three that get used often enough to want them near the top.
+    Field::Comfort,
+    Field::Clean,
+    Field::Quiet,
     Field::SwingV,
     Field::SwingH,
     Field::Powerful,
-    Field::Quiet,
     Field::Econo,
-    Field::Comfort,
     Field::Sensor,
-    Field::Clean,
 ];
 
 impl Field {
