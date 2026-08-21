@@ -41,7 +41,7 @@ Single binary, event loop in `run()` (`main.rs`). Key modules:
 
 `run()` loop acquires mutex each tick, checks RTC time, fires `start_of_day_power_heater()` once per day (weekdays 08:00–13:00, weekends 09:00–13:00 via `last_daytime_run_day`), then drains the input queue with 100ms timeout.
 
-The app opens straight into the A/C. Back returns to the home screen, where the arrows walk a 2x2 tile grid (A/C, Heater / Fan, Bulbs) and OK enters one. Holding Back quits from anywhere. `in_device` on `AppState` is what separates "home cursor" from "screen being shown"; `ActiveDevice::step` does the grid maths by flipping one bit of the tile index.
+The app opens straight into the A/C. Back returns to the home screen, where the arrows walk a 2x2 tile grid (A/C, Bulbs / Fan, Heater) and OK enters one. Holding Back quits from anywhere. `in_device` on `AppState` is what separates "home cursor" from "screen being shown"; `ActiveDevice::step` does the grid maths by flipping one bit of the tile index.
 
 Inside a device, keys are dispatched per screen:
 

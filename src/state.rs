@@ -32,20 +32,22 @@ pub enum RunState {
     SetDaytimeHeat,
 }
 
-/// Also the home screen's 2x2 tile order, read left to right, top to bottom.
+/// The discriminants *are* the home screen's tile positions, read left to right
+/// then top to bottom, and `step` does its arithmetic on them — so reordering
+/// this enum moves the tiles, and `DEVICES` has to move with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uDebug)]
 pub enum ActiveDevice {
     Ac = 0,
-    Heater,
-    Fan,
     Bulbs,
+    Fan,
+    Heater,
 }
 
 pub const DEVICES: [ActiveDevice; 4] = [
     ActiveDevice::Ac,
-    ActiveDevice::Heater,
-    ActiveDevice::Fan,
     ActiveDevice::Bulbs,
+    ActiveDevice::Fan,
+    ActiveDevice::Heater,
 ];
 
 impl ActiveDevice {
