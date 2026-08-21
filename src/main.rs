@@ -15,7 +15,8 @@ mod ir;
 mod notification;
 mod state;
 
-use crate::ac::{FIELDS, Field};
+use crate::ac::{FIELDS, Field, MODES};
+use crate::daikin::Mode;
 use crate::bulbs::BulbsState;
 use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
@@ -32,7 +33,7 @@ use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero::notification::led::{BLINK_START_BLUE, BLINK_STOP};
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{AlignBottom, AlignCenter, AlignLeft, AlignRight, AlignTop, Canvas, ColorBlack, ColorWhite, FontPrimary, FontSecondary, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, ViewPortOrientationVertical, canvas_draw_box, canvas_draw_rframe, canvas_draw_str, canvas_draw_str_aligned, canvas_draw_xbm, canvas_set_color, canvas_set_font, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update};
+use flipperzero_sys::{AlignBottom, AlignCenter, AlignLeft, AlignRight, AlignTop, Canvas, ColorBlack, ColorWhite, FontPrimary, FontSecondary, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, ViewPortOrientationVertical, canvas_draw_box, canvas_draw_disc, canvas_draw_rframe, canvas_draw_str, canvas_draw_str_aligned, canvas_draw_xbm, canvas_set_color, canvas_set_font, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update};
 use state::AppState;
 
 manifest!(
@@ -198,11 +199,17 @@ fn handle_key_presses(
                 // A tap backs out one level. On the home screen there is no
                 // level left, so it leaves the app.
                 InputTypeShort => {
-                    if !app_state.in_device {
+                    if app_state.in_device
+                        && app_state.active_device == ActiveDevice::Ac
+                        && app_state.ac_state.close_menu()
+                    {
+                        // The mode picker swallowed it.
+                    } else if !app_state.in_device {
                         return false;
+                    } else {
+                        app_state.in_device = false;
+                        apply_orientation(view_port, app_state);
                     }
-                    app_state.in_device = false;
-                    apply_orientation(view_port, app_state);
                 }
                 _ => {}
             }
@@ -216,20 +223,22 @@ fn handle_key_presses(
             return true;
         }
 
-        // Walking the A/C list transmits nothing, so it must not raise the
-        // "Changing..." flag or start the blink.
-        if app_state.active_device == ActiveDevice::Ac
-            && matches!(input_event.key, InputKeyUp | InputKeyDown)
-        {
-            if input_event.type_ == InputTypeShort {
-                app_state.ac_state.move_cursor(input_event.key == InputKeyDown);
-            }
-            view_port_update(view_port);
-            return true;
-        }
+        // Anything that only moves a cursor must not raise the "Changing..."
+        // flag or start the blink. The A/C answers for itself, since whether a
+        // key transmits depends on the row and the picker.
+        let sends = match app_state.active_device {
+            ActiveDevice::Ac => app_state.ac_state.sends(input_event.key, input_event.type_),
+            device => key_sends(device, input_event.key),
+        };
 
-        if !key_sends(app_state.active_device, input_event.key) {
-            debug!("Received input that is not handled ({})", input_event.key.0);
+        if !sends {
+            if app_state.active_device == ActiveDevice::Ac
+                && input_event.type_ == InputTypeShort
+            {
+                app_state.ac_state.navigate(input_event.key);
+            } else {
+                debug!("Received input that is not handled ({})", input_event.key.0);
+            }
             view_port_update(view_port);
             return true;
         }
@@ -262,13 +271,12 @@ fn handle_key_presses(
     true
 }
 
-/// Which keys actually put something on the air for a given screen. Anything
-/// else skips the blink and the "Changing..." overlay entirely.
+/// Which keys put something on the air, for the screens whose answer depends
+/// only on the key. The A/C has `AcState::sends` instead.
 #[allow(non_upper_case_globals)]
 fn key_sends(device: ActiveDevice, key: flipperzero_sys::InputKey) -> bool {
     match (device, key) {
         (_, InputKeyOk) => true,
-        (ActiveDevice::Ac, InputKeyLeft | InputKeyRight) => true,
         (ActiveDevice::Fan | ActiveDevice::Bulbs, InputKeyUp | InputKeyDown) => true,
         _ => false,
     }
@@ -343,6 +351,11 @@ fn handle_heater_ok_press(
 /// way back in sync after someone has used the physical remote.
 #[allow(non_upper_case_globals)]
 fn handle_ac_ok_press(app_state: &mut AppState, input_event: InputEvent) {
+    if app_state.ac_state.mode_menu.is_some() {
+        app_state.ac_state.commit_mode();
+        return;
+    }
+
     match input_event.type_ {
         InputTypeShort => app_state.ac_state.toggle_power(),
         InputTypeLong => app_state.ac_state.send(),
@@ -499,8 +512,52 @@ unsafe fn draw_home(canvas: *mut Canvas, app_state: &AppState) {
 }
 
 /// The A/C list, rendered sideways so all eleven settings fit at once.
+/// One mode row in the picker: 16px of icon plus its name.
+const MODE_ROW_HEIGHT: i32 = 21;
+const MODE_FIRST_ROW: i32 = 18;
+
+/// The five modes with an icon each, replacing the settings list while it's
+/// open. Up/Down move, OK picks, Back closes.
+unsafe fn draw_mode_menu(canvas: *mut Canvas, ac: &AcState, selected: Mode) {
+    unsafe {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str_aligned(canvas, AC_WIDTH / 2, 0, AlignCenter, AlignTop, c"Mode".as_ptr());
+        canvas_set_font(canvas, FontSecondary);
+
+        for (index, mode) in MODES.iter().enumerate() {
+            let top = MODE_FIRST_ROW + index as i32 * MODE_ROW_HEIGHT;
+
+            let (icon, label) = match mode {
+                Mode::Auto => (&icons::MODE_AUTO, c"Auto"),
+                Mode::Cool => (&icons::MODE_COOL, c"Cool"),
+                Mode::Heat => (&icons::MODE_HEAT, c"Heat"),
+                Mode::Dry => (&icons::MODE_DRY, c"Dry"),
+                // The tower fan's icon does for fan-only mode too.
+                Mode::Fan => (&icons::FAN, c"Fan"),
+            };
+
+            canvas_draw_xbm(canvas, 5, top + 2, icons::SIZE, icons::SIZE, icon.as_ptr());
+            canvas_draw_str_aligned(canvas, 27, top + 14, AlignLeft, AlignBottom, label.as_ptr());
+
+            // The current mode gets a dot, so the cursor isn't the only thing
+            // on screen and you can see what you'd be changing away from.
+            if *mode == ac.daikin.mode() {
+                canvas_draw_disc(canvas, AC_WIDTH - 6, top + 10, 2);
+            }
+            if *mode == selected {
+                canvas_draw_rframe(canvas, 1, top, AC_WIDTH as usize - 1, 20, 3);
+            }
+        }
+    }
+}
+
 unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
     let ac = &app_state.ac_state;
+
+    if let Some(selected) = ac.mode_menu {
+        unsafe { draw_mode_menu(canvas, ac, selected) };
+        return;
+    }
 
     unsafe {
         canvas_set_font(canvas, FontPrimary);
@@ -536,17 +593,6 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
             canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, value);
 
             canvas_set_color(canvas, ColorBlack);
-        }
-
-        if !app_state.sending {
-            canvas_draw_str_aligned(
-                canvas,
-                AC_WIDTH / 2,
-                AC_HEIGHT,
-                AlignCenter,
-                AlignBottom,
-                c"OK: Power>Sync".as_ptr(),
-            );
         }
     }
 }

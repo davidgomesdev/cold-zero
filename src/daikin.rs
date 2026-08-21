@@ -56,21 +56,6 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub fn next(self) -> Mode {
-        match self {
-            Mode::Auto => Mode::Cool,
-            Mode::Cool => Mode::Heat,
-            Mode::Heat => Mode::Dry,
-            Mode::Dry => Mode::Fan,
-            Mode::Fan => Mode::Auto,
-        }
-    }
-
-    pub fn prev(self) -> Mode {
-        // Four steps round a five-item ring
-        self.next().next().next().next()
-    }
-
     fn from_bits(bits: u8) -> Mode {
         match bits {
             0b010 => Mode::Dry,
