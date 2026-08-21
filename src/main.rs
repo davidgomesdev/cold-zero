@@ -540,7 +540,7 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                 AC_HEIGHT,
                 AlignCenter,
                 AlignBottom,
-                c"<>:set OK:pwr".as_ptr(),
+                c"OK:pwr hOK:send".as_ptr(),
             );
         }
     }
