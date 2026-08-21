@@ -64,6 +64,10 @@ A frame is 583 timings: five bare zero bits, then three header-wrapped sections 
 
 Every edit on the screen sends the whole state immediately, exactly as the physical remote does. Each send stamps the frame with the Flipper's clock (`AcState::send`), because the A/C's own timers run off it — note Furi counts Monday as 1 and the remote counts Sunday as 1.
 
+The 35 bytes are then written to `/ext/apps_data/cold-zero/ac.bin` and reloaded by `AcState::load` on the next launch. This matters more here than for the other devices: because one press sends *everything*, a wrong starting guess doesn't just show wrong, it gets transmitted. `Daikin::from_raw` rejects a file whose three section headers aren't `11 DA 27`, and any storage failure falls back to the default state — a Flipper with no SD card still has to work.
+
+Persistence is not synchronisation. Nothing reads the A/C back, so the physical remote still desyncs the app, and `Hold OK` (resend the app's state) remains the only way to force them back into agreement.
+
 The A/C screen is the only one drawn in `ViewPortOrientationVertical`, so all eleven settings fit on one list. The firmware rotates input keys along with the screen, so handlers keep working in logical directions and need no remapping.
 
 ### Bulbs: GPIO → ESP8266 → Home Assistant

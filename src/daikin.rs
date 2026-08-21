@@ -393,6 +393,26 @@ impl Daikin {
         self.raw[28] = (mins >> 4) as u8;
     }
 
+    // -- Raw access --------------------------------------------------------
+
+    /// The state as it sits on the wire, minus the checksums — those are
+    /// recomputed on every send, so they are not stored.
+    pub fn raw(&self) -> &[u8; STATE_LEN] {
+        &self.raw
+    }
+
+    /// Adopt a state from outside. Rejects anything that doesn't carry the
+    /// three fixed section headers, which is enough to catch a truncated or
+    /// corrupt file without pretending to validate the rest.
+    pub fn from_raw(raw: [u8; STATE_LEN]) -> Option<Daikin> {
+        for section in [0, SECTION1_LEN, SECTION1_LEN + SECTION2_LEN] {
+            if raw[section..section + 3] != [0x11, 0xDA, 0x27] {
+                return None;
+            }
+        }
+        Some(Daikin { raw })
+    }
+
     // -- Sending -----------------------------------------------------------
 
     /// Fill in the three section checksums and put the whole state on the air.

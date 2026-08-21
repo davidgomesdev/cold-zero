@@ -73,7 +73,7 @@ fn run() {
         let mut notification_app = NotificationApp::open();
 
         let app_state = Box::into_raw(Box::new(AppState {
-            ac_state: AcState::default(),
+            ac_state: AcState::load(),
             heater_state: HeaterState::default(),
             fan_state: FanState::default(),
             bulbs_state: BulbsState::default(),

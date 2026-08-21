@@ -4,10 +4,18 @@
 //! here sends the whole frame straight away, exactly like the physical remote
 //! does. See [`crate::daikin`] for the wire format.
 
-use crate::daikin::{Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode};
+use crate::daikin::{Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode, STATE_LEN};
 use core::ffi::CStr;
 use flipperzero::furi::hal::rtc::datetime;
-use flipperzero::info;
+use flipperzero::io::{Read, Write};
+use flipperzero::storage::{File, Storage};
+use flipperzero::{info, warn};
+use flipperzero_sys::storage_common_mkdir;
+
+/// Where the remembered state lives. `/ext/apps_data` is always there; the
+/// per-app directory under it may not be, so saving creates it.
+const STATE_DIR: &CStr = c"/ext/apps_data/cold-zero";
+const STATE_PATH: &CStr = c"/ext/apps_data/cold-zero/ac.bin";
 
 /// The editable rows, top to bottom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +80,50 @@ impl Default for AcState {
 }
 
 impl AcState {
+    /// Pick up where the last session left off.
+    ///
+    /// The A/C never reports back, so the app's state is a belief, and starting
+    /// every launch from a hardcoded default threw that belief away — the first
+    /// keypress would then push a stale guess (including power) onto a unit
+    /// that was set up quite differently. Remembering it is only right while
+    /// the Flipper is the only thing touching the A/C; the physical remote
+    /// still desyncs it, and `Hold OK` is still the way back.
+    pub fn load() -> Self {
+        let mut state = AcState::default();
+
+        let mut raw = [0u8; STATE_LEN];
+        match File::open(STATE_PATH).and_then(|mut file| file.read(&mut raw)) {
+            // A short read means a truncated file, so treat it like corruption.
+            Ok(STATE_LEN) => match Daikin::from_raw(raw) {
+                Some(daikin) => {
+                    info!("A/C: restored the saved state");
+                    state.daikin = daikin;
+                }
+                None => warn!("A/C: saved state is corrupt, starting fresh"),
+            },
+            Ok(read) => warn!("A/C: saved state is {} bytes, starting fresh", read),
+            // Overwhelmingly just "no file yet", i.e. the first ever launch.
+            Err(_) => info!("A/C: no saved state, starting fresh"),
+        }
+
+        state
+    }
+
+    /// Best-effort: a Flipper with no SD card still has to work, so a failure
+    /// here is logged and dropped rather than propagated.
+    fn save(&self) {
+        unsafe { storage_common_mkdir(Storage::open().as_ptr(), STATE_DIR.as_ptr()) };
+
+        let saved = File::create(STATE_PATH).and_then(|mut file| {
+            file.write_all(self.daikin.raw())?;
+            file.flush()
+        });
+
+        if saved.is_err() {
+            warn!("A/C: could not save the state");
+        }
+    }
+
     /// Up/Down walk the rows. No wrap-around: with eleven rows on one screen,
     /// stopping at the ends is less surprising than jumping across.
     pub fn move_cursor(&mut self, down: bool) {
@@ -144,6 +196,9 @@ impl AcState {
         // Furi counts Monday as 1; the remote counts Sunday as 1.
         self.daikin.set_current_day(time.weekday % 7 + 1);
         self.daikin.send();
+        // Saving after the send keeps the blocking file write off the path
+        // between the keypress and the A/C reacting.
+        self.save();
     }
 
     pub fn mode_label(&self) -> &'static CStr {
