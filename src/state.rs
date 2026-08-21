@@ -1,3 +1,4 @@
+use crate::ac::AcState;
 use crate::bulbs::BulbsState;
 use crate::fan::FanState;
 use crate::ir::ir_press_button;
@@ -12,10 +13,15 @@ pub struct AppState {
     /// blocked for the whole sequence, so this is what tells the draw callback
     /// to show "Changing..." instead of stale state.
     pub sending: bool,
+    pub ac_state: AcState,
     pub heater_state: HeaterState,
     pub fan_state: FanState,
     pub bulbs_state: BulbsState,
+    /// Which tile the home screen's cursor is on, and — once `in_device` — the
+    /// screen being shown.
     pub active_device: ActiveDevice,
+    /// False on the home screen, true inside a device's own screen.
+    pub in_device: bool,
     pub run_state: RunState,
     pub mutex: *mut FuriMutex,
 }
@@ -26,11 +32,29 @@ pub enum RunState {
     SetDaytimeHeat,
 }
 
-#[derive(Debug, PartialEq, Eq, uDebug)]
+/// Also the home screen's 2x2 tile order, read left to right, top to bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uDebug)]
 pub enum ActiveDevice {
+    Ac = 0,
     Heater,
     Fan,
     Bulbs,
+}
+
+pub const DEVICES: [ActiveDevice; 4] = [
+    ActiveDevice::Ac,
+    ActiveDevice::Heater,
+    ActiveDevice::Fan,
+    ActiveDevice::Bulbs,
+];
+
+impl ActiveDevice {
+    /// The grid is 2x2, so a horizontal step flips the low bit of the index and
+    /// a vertical step flips the high one. Both wrap, which on two columns and
+    /// two rows is the only sensible thing they can do.
+    pub fn step(self, vertical: bool) -> ActiveDevice {
+        DEVICES[self as usize ^ if vertical { 0b10 } else { 0b01 }]
+    }
 }
 
 pub struct HeaterState {

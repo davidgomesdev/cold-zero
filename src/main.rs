@@ -5,17 +5,22 @@
 extern crate alloc;
 extern crate flipperzero_rt;
 
+mod ac;
 mod allocator;
 mod bulbs;
+mod daikin;
 mod fan;
+mod icons;
 mod ir;
 mod notification;
 mod state;
 
-use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
+use crate::ac::{FIELDS, Field};
 use crate::bulbs::BulbsState;
+use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
-use crate::state::{ActiveDevice, HeaterMode, HeaterState, RunState};
+use crate::state::{ActiveDevice, DEVICES, HeaterMode, HeaterState, RunState};
+use ac::AcState;
 use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
 use alloc::format;
@@ -27,7 +32,7 @@ use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero::notification::led::{BLINK_START_BLUE, BLINK_STOP};
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{AlignBottom, AlignCenter, AlignRight, AlignTop, Canvas, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, canvas_draw_str, canvas_draw_str_aligned, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, AlignLeft, furi_hal_power_shutdown, halt};
+use flipperzero_sys::{AlignBottom, AlignCenter, AlignLeft, AlignRight, AlignTop, Canvas, ColorBlack, ColorWhite, FontPrimary, FontSecondary, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, ViewPortOrientationVertical, canvas_draw_box, canvas_draw_rframe, canvas_draw_str, canvas_draw_str_aligned, canvas_draw_xbm, canvas_set_color, canvas_set_font, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update};
 use state::AppState;
 
 manifest!(
@@ -43,6 +48,13 @@ entry!(main);
 const RECORD_GUI: *const c_char = c"gui".as_ptr();
 const SCREEN_WIDTH: i32 = 127;
 const SCREEN_HEIGHT: i32 = 63;
+/// The A/C screen is the only one rendered sideways, so it gets the other
+/// dimensions.
+const AC_WIDTH: i32 = 63;
+const AC_HEIGHT: i32 = 127;
+/// One home tile, half the screen each way.
+const TILE_WIDTH: i32 = 64;
+const TILE_HEIGHT: i32 = 32;
 /// Column the bulb ON/OFF values start at, so they line up under each other.
 /// Wide enough to clear "Escritorio:" in either of the stock fonts.
 const BULB_VALUE_X: i32 = 70;
@@ -61,10 +73,14 @@ fn run() {
         let mut notification_app = NotificationApp::open();
 
         let app_state = Box::into_raw(Box::new(AppState {
+            ac_state: AcState::default(),
             heater_state: HeaterState::default(),
             fan_state: FanState::default(),
             bulbs_state: BulbsState::default(),
-            active_device: default_device(datetime().month),
+            // The A/C is the one that gets used year round, so the app skips
+            // the home screen and opens straight into it.
+            active_device: ActiveDevice::Ac,
+            in_device: true,
             run_state: RunState::WaitingForDaytime,
             sending: false,
             last_daytime_run_day: 0,
@@ -88,7 +104,7 @@ fn run() {
         ir::set_view_port(view_port);
         view_port_draw_callback_set(view_port, Some(on_draw), app_state.cast());
         view_port_input_callback_set(view_port, Some(on_input), queue.cast());
-        view_port_set_orientation(view_port, ViewPortOrientationHorizontal);
+        apply_orientation(view_port, &*app_state);
 
         bulbs::init();
 
@@ -113,6 +129,7 @@ fn run() {
             let app_state = app_state.as_mut().expect("App state is null!");
 
             if app_state.last_daytime_run_day < time.day
+                && app_state.in_device
                 && app_state.active_device == ActiveDevice::Heater
             {
                 if time.hour < END_OF_START_HOUR && time.hour >= start_hour {
@@ -152,6 +169,17 @@ fn run() {
     }
 }
 
+/// Only the A/C list is rendered sideways. The firmware rotates the input keys
+/// to match, so every handler keeps working in logical directions.
+unsafe fn apply_orientation(view_port: *mut ViewPort, app_state: &AppState) {
+    let orientation = if app_state.in_device && app_state.active_device == ActiveDevice::Ac {
+        ViewPortOrientationVertical
+    } else {
+        ViewPortOrientationHorizontal
+    };
+    unsafe { view_port_set_orientation(view_port, orientation) };
+}
+
 #[allow(non_upper_case_globals)]
 fn handle_key_presses(
     notification_app: &mut NotificationApp,
@@ -162,42 +190,103 @@ fn handle_key_presses(
     unsafe {
         let input_event = *input_event;
 
-        match input_event.key {
-            InputKeyBack => {
-                return false;
-            }
-            InputKeyOk | InputKeyUp | InputKeyDown => {
-                // The sends below block this thread for the whole sequence;
-                // paint "Changing..." first so the screen isn't left frozen on
-                // stale state while they go out.
-                app_state.sending = true;
-                // The notification service blinks on its own thread, so it
-                // keeps going for the whole sequence while this one blocks.
-                notification_app.notify(&BLINK_START_BLUE);
-                view_port_update(view_port);
-
-                if input_event.key == InputKeyOk {
-                    handle_ok_press(notification_app, app_state, input_event);
-                } else {
-                    match app_state.active_device {
-                        ActiveDevice::Fan => handle_fan_control(app_state, input_event),
-                        ActiveDevice::Bulbs => handle_bulbs_control(app_state, input_event),
-                        ActiveDevice::Heater => {}
-                    }
+        // Back is the only key with the same meaning everywhere: tap for the
+        // home screen, hold to quit.
+        if input_event.key == InputKeyBack {
+            match input_event.type_ {
+                InputTypeLong => return false,
+                InputTypeShort => {
+                    app_state.in_device = false;
+                    apply_orientation(view_port, app_state);
                 }
-
-                app_state.sending = false;
-                notification_app.notify(&BLINK_STOP);
+                _ => {}
             }
-            InputKeyLeft | InputKeyRight => cycle_device(app_state, input_event),
-            key => {
-                debug!("Received input that is not handled ({})", key.0);
+            view_port_update(view_port);
+            return true;
+        }
+
+        if !app_state.in_device {
+            handle_home(view_port, app_state, input_event);
+            view_port_update(view_port);
+            return true;
+        }
+
+        // Walking the A/C list transmits nothing, so it must not raise the
+        // "Changing..." flag or start the blink.
+        if app_state.active_device == ActiveDevice::Ac
+            && matches!(input_event.key, InputKeyUp | InputKeyDown)
+        {
+            if input_event.type_ == InputTypeShort {
+                app_state.ac_state.move_cursor(input_event.key == InputKeyDown);
+            }
+            view_port_update(view_port);
+            return true;
+        }
+
+        if !key_sends(app_state.active_device, input_event.key) {
+            debug!("Received input that is not handled ({})", input_event.key.0);
+            view_port_update(view_port);
+            return true;
+        }
+
+        // The sends below block this thread for the whole sequence;
+        // paint "Changing..." first so the screen isn't left frozen on
+        // stale state while they go out.
+        app_state.sending = true;
+        // The notification service blinks on its own thread, so it
+        // keeps going for the whole sequence while this one blocks.
+        notification_app.notify(&BLINK_START_BLUE);
+        view_port_update(view_port);
+
+        if input_event.key == InputKeyOk {
+            handle_ok_press(notification_app, app_state, input_event);
+        } else {
+            match app_state.active_device {
+                ActiveDevice::Ac => handle_ac_control(app_state, input_event),
+                ActiveDevice::Fan => handle_fan_control(app_state, input_event),
+                ActiveDevice::Bulbs => handle_bulbs_control(app_state, input_event),
+                ActiveDevice::Heater => {}
             }
         }
+
+        app_state.sending = false;
+        notification_app.notify(&BLINK_STOP);
 
         view_port_update(view_port);
     }
     true
+}
+
+/// Which keys actually put something on the air for a given screen. Anything
+/// else skips the blink and the "Changing..." overlay entirely.
+#[allow(non_upper_case_globals)]
+fn key_sends(device: ActiveDevice, key: flipperzero_sys::InputKey) -> bool {
+    match (device, key) {
+        (_, InputKeyOk) => true,
+        (ActiveDevice::Ac, InputKeyLeft | InputKeyRight) => true,
+        (ActiveDevice::Fan | ActiveDevice::Bulbs, InputKeyUp | InputKeyDown) => true,
+        _ => false,
+    }
+}
+
+/// Arrows walk the 2x2 tile grid, OK opens the tile.
+#[allow(non_upper_case_globals)]
+fn handle_home(view_port: *mut ViewPort, app_state: &mut AppState, input_event: InputEvent) {
+    if input_event.type_ != InputTypeShort {
+        return;
+    }
+
+    match input_event.key {
+        InputKeyLeft | InputKeyRight => {
+            app_state.active_device = app_state.active_device.step(false)
+        }
+        InputKeyUp | InputKeyDown => app_state.active_device = app_state.active_device.step(true),
+        InputKeyOk => {
+            app_state.in_device = true;
+            unsafe { apply_orientation(view_port, app_state) };
+        }
+        _ => {}
+    }
 }
 
 fn handle_ok_press(
@@ -206,6 +295,7 @@ fn handle_ok_press(
     input_event: InputEvent,
 ) {
     match app_state.active_device {
+        ActiveDevice::Ac => handle_ac_ok_press(app_state, input_event),
         ActiveDevice::Heater => handle_heater_ok_press(notification_app, app_state, input_event),
         ActiveDevice::Fan => handle_fan_ok_press(app_state, input_event),
         ActiveDevice::Bulbs => handle_bulbs_ok_press(app_state, input_event),
@@ -242,6 +332,27 @@ fn handle_heater_ok_press(
             );
         }
     }
+}
+
+/// OK toggles power. Holding it resends the state unchanged, which is the only
+/// way back in sync after someone has used the physical remote.
+#[allow(non_upper_case_globals)]
+fn handle_ac_ok_press(app_state: &mut AppState, input_event: InputEvent) {
+    match input_event.type_ {
+        InputTypeShort => app_state.ac_state.toggle_power(),
+        InputTypeLong => app_state.ac_state.send(),
+        _ => {}
+    }
+}
+
+/// Left/Right change the selected row. Every change retransmits the whole
+/// state, because that is all the Daikin protocol can say.
+fn handle_ac_control(app_state: &mut AppState, input_event: InputEvent) {
+    if input_event.type_ != InputTypeShort {
+        return;
+    }
+
+    app_state.ac_state.adjust(input_event.key == InputKeyRight);
 }
 
 #[allow(non_upper_case_globals)]
@@ -303,34 +414,6 @@ fn handle_fan_control(app_state: &mut AppState, input_event: InputEvent) {
     }
 }
 
-/// Which device the app opens on, by Portuguese meteorological season:
-/// fan for spring and summer (Mar–Aug), heater for autumn and winter (Sep–Feb).
-fn default_device(month: u8) -> ActiveDevice {
-    if (3..=8).contains(&month) {
-        ActiveDevice::Fan
-    } else {
-        ActiveDevice::Heater
-    }
-}
-
-/// One tap emits Press, Short and Release; without the guard the ring would be
-/// stepped three times per press, which lands back where it started.
-fn cycle_device(app_state: &mut AppState, input_event: InputEvent) {
-    if input_event.type_ != InputTypeShort {
-        return;
-    }
-
-    let forward = input_event.key == InputKeyRight;
-    app_state.active_device = match (&app_state.active_device, forward) {
-        (ActiveDevice::Heater, true) => ActiveDevice::Fan,
-        (ActiveDevice::Fan, true) => ActiveDevice::Bulbs,
-        (ActiveDevice::Bulbs, true) => ActiveDevice::Heater,
-        (ActiveDevice::Heater, false) => ActiveDevice::Bulbs,
-        (ActiveDevice::Fan, false) => ActiveDevice::Heater,
-        (ActiveDevice::Bulbs, false) => ActiveDevice::Fan,
-    };
-}
-
 fn start_of_day_power_heater(notification_app: &mut NotificationApp, app_state: &mut AppState) {
     let heater_state = &mut app_state.heater_state;
 
@@ -345,7 +428,15 @@ fn start_of_day_power_heater(notification_app: &mut NotificationApp, app_state: 
 unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
     unsafe {
         let app_state: &AppState = &*(app_state as *const AppState);
+        canvas_set_font(canvas, FontSecondary);
+
+        if !app_state.in_device {
+            draw_home(canvas, app_state);
+            return;
+        }
+
         match app_state.active_device {
+            ActiveDevice::Ac => draw_ac(canvas, app_state),
             ActiveDevice::Heater => draw_heater(canvas, app_state),
             ActiveDevice::Fan => draw_fan(canvas, app_state),
             ActiveDevice::Bulbs => draw_bulbs(canvas, app_state),
@@ -354,13 +445,109 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
         if app_state.sending {
             // Bumped by ir_press_button, so the dots step once per frame sent
             let frame = ir::send_count() as usize % CHANGING.len();
-            canvas_draw_str(canvas, 0, 50, CHANGING[frame].as_ptr());
+            let y = if app_state.active_device == ActiveDevice::Ac {
+                AC_HEIGHT
+            } else {
+                50
+            };
+            canvas_draw_str(canvas, 0, y, CHANGING[frame].as_ptr());
+        }
+    }
+}
+
+/// Four tiles, one per device, selected one framed.
+unsafe fn draw_home(canvas: *mut Canvas, app_state: &AppState) {
+    for (index, device) in DEVICES.iter().enumerate() {
+        let x = (index as i32 % 2) * TILE_WIDTH;
+        let y = (index as i32 / 2) * TILE_HEIGHT;
+
+        let (icon, label) = match device {
+            ActiveDevice::Ac => (&icons::AC, c"A/C"),
+            ActiveDevice::Heater => (&icons::HEATER, c"Heater"),
+            ActiveDevice::Fan => (&icons::FAN, c"Fan"),
+            ActiveDevice::Bulbs => (&icons::BULBS, c"Bulbs"),
+        };
+
+        unsafe {
+            canvas_draw_xbm(
+                canvas,
+                x + (TILE_WIDTH - icons::SIZE as i32) / 2,
+                y + 3,
+                icons::SIZE,
+                icons::SIZE,
+                icon.as_ptr(),
+            );
+            canvas_draw_str_aligned(
+                canvas,
+                x + TILE_WIDTH / 2,
+                y + TILE_HEIGHT - 3,
+                AlignCenter,
+                AlignBottom,
+                label.as_ptr(),
+            );
+
+            if *device == app_state.active_device {
+                canvas_draw_rframe(canvas, x + 1, y + 1, TILE_WIDTH as usize - 2, TILE_HEIGHT as usize - 2, 3);
+            }
+        }
+    }
+}
+
+/// The A/C list, rendered sideways so all eleven settings fit at once.
+unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
+    let ac = &app_state.ac_state;
+
+    unsafe {
+        canvas_set_font(canvas, FontPrimary);
+        let title = if ac.daikin.power() {
+            c"A/C ON".as_ptr()
+        } else {
+            c"A/C OFF".as_ptr()
+        };
+        canvas_draw_str_aligned(canvas, AC_WIDTH / 2, 0, AlignCenter, AlignTop, title);
+        canvas_set_font(canvas, FontSecondary);
+
+        for (index, field) in FIELDS.iter().enumerate() {
+            let y = 20 + index as i32 * 9;
+
+            if *field == ac.field {
+                canvas_draw_box(canvas, 0, y - 7, AC_WIDTH as usize + 1, 9);
+                canvas_set_color(canvas, ColorWhite);
+            }
+
+            canvas_draw_str_aligned(canvas, 1, y, AlignLeft, AlignBottom, field.label().as_ptr());
+
+            let temp;
+            let value = match (field, ac.flag(*field)) {
+                (_, Some(on)) => on_off(on),
+                (Field::Mode, _) => ac.mode_label().as_ptr(),
+                (Field::Fan, _) => ac.fan_label().as_ptr(),
+                (Field::Temp, _) => {
+                    temp = format!("{}C\0", ac.daikin.temp());
+                    temp.as_ptr()
+                }
+                _ => c"".as_ptr(),
+            };
+            canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, value);
+
+            canvas_set_color(canvas, ColorBlack);
+        }
+
+        if !app_state.sending {
+            canvas_draw_str_aligned(
+                canvas,
+                AC_WIDTH / 2,
+                AC_HEIGHT,
+                AlignCenter,
+                AlignBottom,
+                c"<>:set OK:pwr".as_ptr(),
+            );
         }
     }
 }
 
 unsafe fn draw_heater(canvas: *mut Canvas, app_state: &AppState) {
-    draw_header(canvas, app_state);
+    draw_title(canvas, c"Heater");
 
     let status = match app_state.run_state {
         RunState::WaitingForDaytime => c"Waiting for daytime...".as_ptr(),
@@ -400,24 +587,19 @@ unsafe fn draw_time(canvas: *mut Canvas) {
     canvas_draw_str_aligned(canvas, 0, SCREEN_HEIGHT, AlignLeft, AlignBottom, time_str.as_ptr());
 }
 
-unsafe fn draw_header(canvas: *mut Canvas, app_state: &AppState) {
-    let active_device_label = match app_state.active_device {
-        ActiveDevice::Heater => c"< Heater >".as_ptr(),
-        ActiveDevice::Fan => c"< Fan >".as_ptr(),
-        ActiveDevice::Bulbs => c"< Bulbs >".as_ptr(),
-    };
+unsafe fn draw_title(canvas: *mut Canvas, title: &CStr) {
     canvas_draw_str_aligned(
         canvas,
         SCREEN_WIDTH / 2,
         0,
         AlignCenter,
         AlignTop,
-        active_device_label,
+        title.as_ptr(),
     );
 }
 
 unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
-    draw_header(canvas, app_state);
+    draw_title(canvas, c"Fan");
 
     if app_state.fan_state.is_on {
         let on_str = format!(
@@ -476,7 +658,7 @@ unsafe fn draw_fan(canvas: *mut Canvas, app_state: &AppState) {
 }
 
 unsafe fn draw_bulbs(canvas: *mut Canvas, app_state: &AppState) {
-    draw_header(canvas, app_state);
+    draw_title(canvas, c"Bulbs");
 
     canvas_draw_str(canvas, 0, 20, c"Escrit\xf3rio:".as_ptr());
     canvas_draw_str(
