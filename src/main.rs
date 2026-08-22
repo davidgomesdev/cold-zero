@@ -13,12 +13,14 @@ mod fan;
 mod icons;
 mod ir;
 mod notification;
+mod presets;
 mod state;
 
 use crate::ac::{FIELDS, Field, Picker, View};
 use crate::bulbs::BulbsState;
 use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
+use crate::presets::NAME_LEN;
 use crate::state::{ActiveDevice, DEVICES, HeaterMode, HeaterState, RunState};
 use ac::AcState;
 use alloc::alloc::{alloc, dealloc};
@@ -27,12 +29,13 @@ use alloc::format;
 use alloc::string::String;
 use core::alloc::Layout;
 use core::ffi::{CStr, c_char, c_void};
+use core::sync::atomic::{AtomicBool, Ordering};
 use flipperzero::debug;
 use flipperzero::furi::hal::rtc::datetime;
 use flipperzero::notification::NotificationApp;
 use flipperzero::notification::led::{BLINK_START_BLUE, BLINK_STOP};
 use flipperzero_rt::{entry, manifest};
-use flipperzero_sys::{AlignBottom, AlignCenter, AlignLeft, AlignRight, AlignTop, Canvas, ColorBlack, ColorWhite, FontPrimary, FontSecondary, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, ViewPortOrientationVertical, canvas_draw_box, canvas_draw_disc, canvas_draw_rframe, canvas_draw_str, canvas_draw_str_aligned, canvas_draw_xbm, canvas_set_color, canvas_set_font, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update};
+use flipperzero_sys::{AlignBottom, AlignCenter, AlignLeft, AlignRight, AlignTop, Canvas, ColorBlack, ColorWhite, FontPrimary, FontSecondary, FuriMessageQueue, FuriMutexTypeNormal, FuriStatusOk, FuriWaitForever, Gui, GuiLayerFullscreen, InputEvent, InputKeyBack, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputTypeLong, InputTypeShort, ViewPort, ViewPortOrientationHorizontal, ViewPortOrientationVertical, canvas_draw_box, canvas_draw_disc, canvas_draw_rframe, canvas_draw_str, canvas_draw_str_aligned, canvas_draw_xbm, canvas_set_color, canvas_set_font, free, furi_message_queue_alloc, furi_message_queue_free, furi_message_queue_get, furi_message_queue_put, furi_delay_ms, furi_mutex_acquire, furi_mutex_alloc, furi_mutex_free, furi_mutex_release, furi_record_close, furi_record_open, gui_add_view_port, gui_remove_view_port, view_port_alloc, view_port_draw_callback_set, view_port_enabled_set, view_port_free, view_port_input_callback_set, view_port_set_orientation, view_port_update, text_input_alloc, text_input_free, text_input_get_view, text_input_set_header_text, text_input_set_minimum_length, text_input_set_result_callback, view_holder_alloc, view_holder_attach_to_gui, view_holder_free, view_holder_set_back_callback, view_holder_set_view};
 use state::AppState;
 
 manifest!(
@@ -149,8 +152,13 @@ fn run() {
             }
 
             if furi_message_queue_get(queue, input_event.cast(), 100) == FuriStatusOk {
-                running =
-                    handle_key_presses(&mut notification_app, view_port, input_event, app_state);
+                running = handle_key_presses(
+                    &mut notification_app,
+                    gui,
+                    view_port,
+                    input_event,
+                    app_state,
+                );
             }
 
             furi_mutex_release(app_state.mutex);
@@ -183,6 +191,7 @@ unsafe fn apply_orientation(view_port: *mut ViewPort, app_state: &AppState) {
 #[allow(non_upper_case_globals)]
 fn handle_key_presses(
     notification_app: &mut NotificationApp,
+    gui: *mut Gui,
     view_port: *mut ViewPort,
     input_event: *mut InputEvent,
     app_state: &mut AppState,
@@ -218,6 +227,20 @@ fn handle_key_presses(
 
         if !app_state.in_device {
             handle_home(view_port, app_state, input_event);
+            view_port_update(view_port);
+            return true;
+        }
+
+        // "Create..." is the one row whose answer can't come from the four
+        // keys, so it takes over the screen before anything else is decided.
+        if app_state.active_device == ActiveDevice::Ac
+            && input_event.key == InputKeyOk
+            && input_event.type_ == InputTypeShort
+            && app_state.ac_state.creating()
+        {
+            if let Some(name) = ask_name(gui, view_port) {
+                app_state.ac_state.create_preset(&name);
+            }
             view_port_update(view_port);
             return true;
         }
@@ -469,6 +492,67 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
     }
 }
 
+/// Set when the text input closes, either way: the main loop is parked on it,
+/// and the callbacks run on the GUI thread.
+static NAMED: AtomicBool = AtomicBool::new(false);
+static NAME_SAVED: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn on_name_saved(_context: *mut c_void) {
+    NAME_SAVED.store(true, Ordering::Relaxed);
+    NAMED.store(true, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn on_name_cancelled(_context: *mut c_void) {
+    NAMED.store(true, Ordering::Relaxed);
+}
+
+/// Ask for a preset name on the firmware's keyboard.
+///
+/// This is the app's one blocking prompt. The keyboard is a `View`, which the
+/// rest of the app is not built around, so it goes up in a `ViewHolder` of its
+/// own with our own view port switched off underneath -- otherwise both would
+/// be drawing and both would be taking keys. The main loop waits here rather
+/// than growing a second state machine for a question that has to be answered
+/// before anything else can happen.
+unsafe fn ask_name(gui: *mut Gui, view_port: *mut ViewPort) -> Option<[u8; NAME_LEN]> {
+    unsafe {
+        let mut name = [0u8; NAME_LEN];
+        NAMED.store(false, Ordering::Relaxed);
+        NAME_SAVED.store(false, Ordering::Relaxed);
+
+        let text_input = text_input_alloc();
+        text_input_set_header_text(text_input, c"Preset name".as_ptr());
+        // An empty name would draw as nothing at all on the row.
+        text_input_set_minimum_length(text_input, 1);
+        text_input_set_result_callback(
+            text_input,
+            Some(on_name_saved),
+            core::ptr::null_mut(),
+            name.as_mut_ptr().cast(),
+            NAME_LEN,
+            true,
+        );
+
+        let holder = view_holder_alloc();
+        view_holder_set_back_callback(holder, Some(on_name_cancelled), core::ptr::null_mut());
+        view_holder_attach_to_gui(holder, gui);
+        view_port_enabled_set(view_port, false);
+        view_holder_set_view(holder, text_input_get_view(text_input));
+
+        while !NAMED.load(Ordering::Relaxed) {
+            furi_delay_ms(20);
+        }
+
+        // The view has to come off the holder before either can be freed.
+        view_holder_set_view(holder, core::ptr::null_mut());
+        view_holder_free(holder);
+        text_input_free(text_input);
+        view_port_enabled_set(view_port, true);
+
+        NAME_SAVED.load(Ordering::Relaxed).then_some(name)
+    }
+}
+
 /// Four tiles, one per device, selected one framed.
 unsafe fn draw_home(canvas: *mut Canvas, app_state: &AppState) {
     for (index, device) in DEVICES.iter().enumerate() {
@@ -507,7 +591,9 @@ unsafe fn draw_home(canvas: *mut Canvas, app_state: &AppState) {
     }
 }
 
-/// The A/C list, rendered sideways so all eleven settings fit at once.
+/// The A/C list, rendered sideways so every setting fits at once.
+const ROW_HEIGHT: i32 = 8;
+
 /// One option row in a picker: 16px of icon plus its name.
 const MENU_ROW_HEIGHT: i32 = 21;
 const MENU_FIRST_ROW: i32 = 18;
@@ -645,14 +731,21 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
         canvas_set_font(canvas, FontSecondary);
 
         for (index, field) in FIELDS.iter().enumerate() {
-            let y = 18 + index as i32 * 9;
+            // Eight rather than nine: the preset rows took the slack, and the
+            // list still has to end above the "Changing..." overlay.
+            let y = 18 + index as i32 * ROW_HEIGHT;
 
             if *field == ac.field {
-                canvas_draw_box(canvas, 0, y - 7, AC_WIDTH as usize + 1, 9);
+                canvas_draw_box(canvas, 0, y - 7, AC_WIDTH as usize + 1, ROW_HEIGHT as usize);
                 canvas_set_color(canvas, ColorWhite);
             }
 
-            canvas_draw_str_aligned(canvas, 1, y, AlignLeft, AlignBottom, field.label().as_ptr());
+            // One row's label depends on which preset is loaded.
+            let label = match field {
+                Field::PresetAction => ac.action_label(),
+                field => field.label(),
+            };
+            canvas_draw_str_aligned(canvas, 1, y, AlignLeft, AlignBottom, label.as_ptr());
 
             let picker = field.picker();
             // Whichever row needs a formatted value borrows this; each path
@@ -663,6 +756,9 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                 Some(picker) => ac.picker_label(picker).as_ptr(),
                 None => match (field, ac.flag(*field)) {
                     (_, Some(on)) => on_off(on),
+                    // Already NUL-terminated where it is stored, so it goes
+                    // straight to the canvas.
+                    (Field::Preset, _) => ac.presets.label(),
                     (Field::Timer, _) => ac.timer_label().as_ptr(),
                     (Field::Fan, _) => ac.fan_label().as_ptr(),
                     (Field::Temp, _) => {

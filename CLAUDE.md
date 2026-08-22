@@ -30,6 +30,7 @@ Single binary, event loop in `run()` (`main.rs`). Key modules:
 - **`state`** — `AppState` (shared across draw/input callbacks via mutex), `HeaterState` (tracks on/off, temp 5–35°C, mode), `RunState` (state machine: `WaitingForDaytime` → `Changing` → `SetDaytimeHeat`)
 - **`daikin`** — the ARC466A33 protocol: the 35-byte remote state, its setters/getters, the three section checksums and the raw timing encoder. Pure protocol, no UI
 - **`ac`** — `AcState`: the A/C screen's cursor over a `Daikin`, plus the labels the draw code renders
+- **`presets`** — `Presets`: the named states the A/C screen switches between, and their file
 - **`icons`** — 16x16 XBM bitmaps for the home tiles (regenerate with `tools/xbm.py`)
 - **`fan`** — `FanState` for the tower fan (speed, mode, rotation, timer, light). Same open-loop IR model as the heater
 - **`bulbs`** — `BulbsState` for the two HA bulbs. Not IR: pulses GPIO pins that an ESP8266 relays to Home Assistant (see below)
@@ -47,7 +48,7 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power, or the focused row's action — open it if it leads somewhere · long: power on and resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
+| A/C | short: power, or the focused row's action — open it if it leads somewhere, name a preset on `Create...` · long: power on and resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, switch preset, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
@@ -81,6 +82,20 @@ Quiet stays its own flag row: eco and quiet *can* both be on, so folding quiet i
 
 The daytime heater automation still only fires while the Heater screen is open, so with the A/C as the opening screen it will not run unless you navigate there.
 
+### A/C presets
+
+The whole 35-byte state is one thing, so the screen switches between whole states rather than making you re-set eight rows. `Preset` is the first row and everything under it belongs to whichever preset it names; `daikin` is that preset unpacked, and every save writes it back through `Presets::store`, so the file and the app's belief can't come apart.
+
+Two ship with the app — `Day` (23°C, cool, fan auto) and `Sleep` (25°C, cool, quiet and eco) — and both are editable like any other. The last row puts a built-in back the way it shipped (`Reset default`) or removes a custom one (`Delete preset`); it acts on either arrow or on OK, the same convention `Clear` uses, and it sends, because after it the live state belongs to a different preset.
+
+Left/Right walk the ring, and each landing transmits: a preset *is* the whole state, so switching to one means telling the A/C about all of it. The ring is tap-only for the same reason the pickers are — it wraps.
+
+One slot past the end is `Create...`, which holds no state. Landing there transmits nothing and leaves the live preset alone (`Presets::step` returns `None`), so `AcState::sends` has to know *before* dispatching whether a step lands on a preset — that is what `Presets::lands` answers. Moving the cursor off the row while it is showing drops back to the real preset, since there is nothing under it to edit. Once the list is full (eight) the slot disappears rather than asking for a name it would have to throw away.
+
+OK on `Create...` asks for a name on the firmware's keyboard. That is a `View`, which the rest of the app is not built around, so `ask_name` puts it in a `ViewHolder` of its own and switches our view port off underneath — otherwise both would draw and both would take keys — then blocks the main loop on an `AtomicBool` the text input's callbacks set. It is the only blocking prompt in the app; a question that has to be answered before anything else can happen is not worth a second state machine. The new preset holds what is on screen, so nothing is transmitted: the A/C is already in that state.
+
+`presets.bin` is a count, the selected index, then one 9-byte NUL-terminated name and 35 state bytes per preset. `Presets::parse` rejects a truncated file, a selection past the end, fewer presets than the built-ins, a name that lost its terminator (the canvas would read off the end of the array) and any frame `Daikin::from_raw` won't take. On the first launch after the upgrade it seeds `Day` from the old `ac.bin`, so the app doesn't start believing something it never sent.
+
 ### A/C: the Daikin protocol
 
 The heater and fan remotes send one frame per button, so their timings are captured. The Daikin is the opposite — it is stateful, and every press retransmits all 35 bytes — so `daikin` builds frames instead of replaying them, ported from IRremoteESP8266's `DAIKIN` protocol (`ir_Daikin.h` lists ARC466A33 under it, not under DAIKIN2/312).
@@ -89,11 +104,11 @@ A frame is 583 timings: five bare zero bits, then three header-wrapped sections 
 
 Every edit on the screen sends the whole state immediately, exactly as the physical remote does. Each send stamps the frame with the Flipper's clock (`AcState::send`), because the A/C's own timers run off it — note Furi counts Monday as 1 and the remote counts Sunday as 1.
 
-The 35 bytes are then written to `/ext/apps_data/cold-zero/ac.bin` and reloaded by `AcState::load` on the next launch. This matters more here than for the other devices: because one press sends *everything*, a wrong starting guess doesn't just show wrong, it gets transmitted. `Daikin::from_raw` rejects a file whose three section headers aren't `11 DA 27`, and any storage failure falls back to the default state — a Flipper with no SD card still has to work.
+The 35 bytes are then written to `/ext/apps_data/cold-zero/presets.bin` and reloaded by `AcState::load` on the next launch. This matters more here than for the other devices: because one press sends *everything*, a wrong starting guess doesn't just show wrong, it gets transmitted. `Daikin::from_raw` rejects a file whose three section headers aren't `11 DA 27`, and any storage failure falls back to the default state — a Flipper with no SD card still has to work.
 
 Persistence is not synchronisation. Nothing reads the A/C back, so the physical remote still desyncs the app, and `Hold OK` (resend the app's state) remains the only way to force them back into agreement.
 
-The A/C screen is the only one drawn in `ViewPortOrientationVertical`, so all eleven settings fit on one list. The firmware rotates input keys along with the screen, so handlers keep working in logical directions and need no remapping.
+The A/C screen is the only one drawn in `ViewPortOrientationVertical`, so all thirteen rows fit on one list (at an 8px pitch, which is what the preset rows cost). The firmware rotates input keys along with the screen, so handlers keep working in logical directions and need no remapping.
 
 ### Bulbs: GPIO → ESP8266 → Home Assistant
 
