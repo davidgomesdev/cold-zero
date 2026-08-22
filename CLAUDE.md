@@ -47,7 +47,7 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
+| A/C | short: power, or the focused row's action · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
@@ -63,7 +63,7 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 
 The `Timer` row leads to a sub-list holding `Off at` and `On at`, the protocol's two timers. Two independent times is one too many for a single row, and neither is a choice from a set, so it is a sub-list (`View::Timers`) rather than a [`Picker`] — the cursor in `AcState::field` always points into `view.fields()`. The row itself only says whether anything is armed: `On` or `-`.
 
-Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so either arrow triggers it — the same convention the flag rows already use — and it disables both.
+Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so either arrow triggers it — the same convention the flag rows already use — and it disables both. OK does the same thing there instead of toggling power, which is the one place OK means something other than power; `AcState::confirm` holds that decision so it sits next to the rows it depends on. Holding OK still means "resend as-is" everywhere, including there.
 
 Each armed timer shows two lines: the clock time it fires at, and a caption saying how far off that is (`in 2h30`). The stored value is absolute, which is what makes a retransmit idempotent, so the caption is derived at paint time from `daikin::minutes_ahead` rather than stored. That means the sub-list needs its own layout (`draw_timers`) instead of the settings list's plain row loop, and the selection highlight grows to 19px to cover both lines when a timer is armed.
 
