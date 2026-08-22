@@ -47,7 +47,7 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp and Fan |
+| A/C | short: power · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
@@ -59,7 +59,15 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 - **Mode** — auto, cool, heat, dry, fan.
 - **Run** — normal, eco, power. This one exists because the protocol won't hold eco and powerful at once (`set_powerful` clears econo, `set_econo` clears powerful). As two flag rows they silently switched each other off; as one row with three values the exclusion is the shape of the control rather than a surprise.
 
-Holding Left or Right runs through the Temp and Fan values. The steps are applied locally and a *single* frame goes out on release (`AcState::repeating`) — every Daikin frame carries the whole state, so only the last one matters, and one send blocks for ~400ms, which would leave the display seconds behind the key. Flag rows don't repeat: there is nothing to run through, and toggling at the repeat rate lands wherever the release happens to fall.
+### A/C timers
+
+`Off at` and `On at` drive the protocol's two timers. Left/Right step them in 30-minute notches, holding repeats, and stepping down through zero switches the timer off. The row shows the clock time it fires at, or `--`.
+
+The wire format stores an absolute time of day, and so does this — `daikin::next_timer` converts to "minutes from now" only for the duration of a step. That is what makes a retransmit idempotent: if a duration were recomputed on every send, touching an unrelated row would restart the countdown. It also means the displayed value is a fixed clock time rather than a countdown, which is honest about what the A/C was actually told.
+
+Stepping up stops a day out instead of wrapping, since a wrap would silently turn "in 24h" into "in half an hour". The timers survive a restart along with everything else in the saved state, exactly as they survive a battery change in the real remote.
+
+Holding Left or Right runs through the Temp, Fan and timer values. The steps are applied locally and a *single* frame goes out on release (`AcState::repeating`) — every Daikin frame carries the whole state, so only the last one matters, and one send blocks for ~400ms, which would leave the display seconds behind the key. Flag rows don't repeat: there is nothing to run through, and toggling at the repeat rate lands wherever the release happens to fall.
 
 Up/Down repeat too, and need none of that machinery — moving the cursor transmits nothing. The list clamps at its ends, so holding Down means "go to the bottom". The pickers stay tap-only for the same reason the flag rows do: their rings are three and five long, so a held arrow would spin past whatever you were aiming at.
 

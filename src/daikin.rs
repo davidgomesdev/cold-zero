@@ -31,6 +31,47 @@ const LEADER_BITS: usize = 5;
 pub const MIN_TEMP: u8 = 10;
 pub const MAX_TEMP: u8 = 32;
 
+/// Minutes in a day. Both timers and the frame's clock are stored as minutes
+/// past midnight, so this is the modulus for all of it.
+pub const DAY: u16 = 24 * 60;
+/// How far one step moves a timer.
+pub const TIMER_STEP: u16 = 30;
+
+/// Step a timer one notch, in the direction given.
+///
+/// Timers go on the wire as an absolute time of day, which is what makes a
+/// retransmit idempotent — recomputing a duration on every send would restart
+/// the countdown whenever an unrelated setting was touched. People think in
+/// durations though, so stepping happens in "minutes from now" and converts
+/// back. `current` is the time the timer is set for, or `None` when it is off;
+/// the return says the same about where it should land.
+pub fn next_timer(now: u16, current: Option<u16>, forward: bool) -> Option<u16> {
+    // Wrapping the subtraction is what lets a target past midnight read as
+    // "in 3h" rather than "twenty hours ago".
+    let ahead = match current {
+        Some(time) => (time % DAY + DAY - now % DAY) % DAY,
+        None => 0,
+    };
+
+    let ahead = if forward {
+        ahead + TIMER_STEP
+    } else {
+        ahead.saturating_sub(TIMER_STEP)
+    };
+
+    // Stepping down through zero switches the timer off. A full day is as far
+    // ahead as the field can mean, so stepping up stops there rather than
+    // wrapping round to "in a minute".
+    if ahead == 0 {
+        return None;
+    }
+    if ahead >= DAY {
+        return current;
+    }
+
+    Some((now + ahead) % DAY)
+}
+
 /// Timer slots the remote parks at when the timer is off.
 #[allow(dead_code)]
 const UNUSED_TIME: u16 = 0x600;
@@ -344,6 +385,24 @@ impl Daikin {
 
     // -- Bytes 26-28: on/off timers ---------------------------------------
 
+    pub fn on_timer(&self) -> bool {
+        self.bit(21, 1)
+    }
+
+    pub fn off_timer(&self) -> bool {
+        self.bit(21, 2)
+    }
+
+    /// Minutes past midnight. Meaningless unless the matching enable bit is
+    /// set — a disabled timer parks at `UNUSED_TIME`.
+    pub fn on_time(&self) -> u16 {
+        u16::from_le_bytes([self.raw[26], self.raw[27]]) & 0x0FFF
+    }
+
+    pub fn off_time(&self) -> u16 {
+        (self.raw[27] >> 4) as u16 | ((self.raw[28] as u16) << 4)
+    }
+
     pub fn enable_on_timer(&mut self, mins_past_midnight: u16) {
         self.set_bit(21, 1, true);
         self.set_on_time(mins_past_midnight);
@@ -505,6 +564,9 @@ fn self_check() {
     assert!(captured.powerful(), "Daikin powerful");
     assert!(!captured.quiet(), "Daikin quiet");
     assert!(captured.weekly_timer(), "Daikin weekly timer");
+    assert!(captured.on_timer() && captured.off_timer(), "Daikin timer flags");
+    assert_eq!(captured.on_time(), 21 * 60 + 30, "Daikin on time");
+    assert_eq!(captured.off_time(), 6 * 60 + 10, "Daikin off time");
 
     assert_eq!(encode(&CAPTURED).len(), TIMINGS_LEN, "Daikin frame length");
 }

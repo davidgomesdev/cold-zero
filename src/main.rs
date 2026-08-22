@@ -465,6 +465,13 @@ unsafe extern "C" fn on_draw(canvas: *mut Canvas, app_state: *mut c_void) {
             } else {
                 50
             };
+            // The A/C list now runs the full height of the screen, so the
+            // overlay needs its own ground to stay legible over the last rows.
+            if app_state.active_device == ActiveDevice::Ac {
+                canvas_set_color(canvas, ColorWhite);
+                canvas_draw_box(canvas, 0, y - 8, AC_WIDTH as usize + 1, 10);
+                canvas_set_color(canvas, ColorBlack);
+            }
             canvas_draw_str(canvas, 0, y, CHANGING[frame].as_ptr());
         }
     }
@@ -566,7 +573,7 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
         canvas_set_font(canvas, FontSecondary);
 
         for (index, field) in FIELDS.iter().enumerate() {
-            let y = 20 + index as i32 * 9;
+            let y = 18 + index as i32 * 9;
 
             if *field == ac.field {
                 canvas_draw_box(canvas, 0, y - 7, AC_WIDTH as usize + 1, 9);
@@ -576,7 +583,9 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
             canvas_draw_str_aligned(canvas, 1, y, AlignLeft, AlignBottom, field.label().as_ptr());
 
             let picker = field.picker();
-            let temp;
+            // Whichever row needs a formatted value borrows this; each path
+            // through the match writes it at most once.
+            let owned;
             let value = match picker {
                 // A picker row shows whichever option is in effect.
                 Some(picker) => ac.picker_label(picker).as_ptr(),
@@ -584,8 +593,20 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                     (_, Some(on)) => on_off(on),
                     (Field::Fan, _) => ac.fan_label().as_ptr(),
                     (Field::Temp, _) => {
-                        temp = format!("{}C\0", ac.daikin.temp());
-                        temp.as_ptr()
+                        owned = format!("{}C\0", ac.daikin.temp());
+                        owned.as_ptr()
+                    }
+                    // The clock time it fires at, not a countdown: the stored
+                    // value is absolute, and a countdown would go stale between
+                    // repaints anyway.
+                    (Field::OffAt | Field::OnAt, _) => {
+                        match ac.timer_at(*field == Field::OnAt) {
+                            Some(mins) => {
+                                owned = format!("{:02}:{:02}\0", mins / 60, mins % 60);
+                                owned.as_ptr()
+                            }
+                            None => c"--".as_ptr(),
+                        }
                     }
                     _ => c"".as_ptr(),
                 },
