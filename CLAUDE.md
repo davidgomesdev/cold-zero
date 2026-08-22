@@ -64,7 +64,7 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 
 The `Timer` row leads to a sub-list holding `Off at` and `On at`, the protocol's two timers. Two independent times is one too many for a single row, and neither is a choice from a set, so it is a sub-list (`View::Timers`) rather than a [`Picker`] — the cursor in `AcState::field` always points into `view.fields()`. The row itself only says whether anything is armed: `On` or `-`.
 
-Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so either arrow triggers it — the same convention the flag rows already use — and it disables both. OK does the same thing there instead of toggling power; `AcState::confirm` holds that decision so it sits next to the rows it depends on. Holding OK still means "on, and resend" everywhere, including there.
+Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so only OK triggers it and it disables both: an arrow means "change this by one", and a row with nothing to change by one should not fire on a nudge while walking past. OK there means that instead of toggling power; `AcState::confirm` holds that decision so it sits next to the rows it depends on. Holding OK still means "on, and resend" everywhere, including there.
 
 Each armed timer shows two lines: the clock time it fires at, and a caption saying how far off that is (`in 2h30`). The stored value is absolute, which is what makes a retransmit idempotent, so the caption is derived at paint time from `daikin::minutes_ahead` rather than stored. That means the sub-list needs its own layout (`draw_timers`) instead of the settings list's plain row loop, and the selection highlight grows to 19px to cover both lines when a timer is armed.
 
@@ -86,7 +86,7 @@ The daytime heater automation still only fires while the Heater screen is open, 
 
 The whole 35-byte state is one thing, so the screen switches between whole states rather than making you re-set eight rows. `Preset` is the first row and everything under it belongs to whichever preset it names; `daikin` is that preset unpacked, and every save writes it back through `Presets::store`, so the file and the app's belief can't come apart.
 
-Two ship with the app — `Day` (23°C, cool, fan auto) and `Sleep` (25°C, cool, quiet and eco) — and both are editable like any other. The last row puts a built-in back the way it shipped (`Reset default`) or removes a custom one (`Delete preset`); it acts on either arrow or on OK, the same convention `Clear` uses, and it sends, because after it the live state belongs to a different preset.
+Two ship with the app — `Day` (23°C, cool, fan auto) and `Sleep` (25°C, cool, quiet and eco) — and both are editable like any other. The last row puts a built-in back the way it shipped (`Reset default`) or removes a custom one (`Delete preset`); OK triggers it and the arrows don't — the same as `Clear`, and for the same reason — and it sends, because after it the live state belongs to a different preset.
 
 Left/Right walk the ring, and each landing transmits: a preset *is* the whole state, so switching to one means telling the A/C about all of it. The ring is tap-only for the same reason the pickers are — it wraps.
 

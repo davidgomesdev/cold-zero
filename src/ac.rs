@@ -122,6 +122,14 @@ impl Field {
         matches!(self, Field::Temp | Field::Fan | Field::OffAt | Field::OnAt)
     }
 
+    /// Rows that do something rather than hold a value. Only OK triggers them:
+    /// an arrow means "change this by one", and there is nothing here to
+    /// change by one — landing on the row while walking the list and nudging
+    /// an arrow out of habit would clear or delete something.
+    pub fn acts(self) -> bool {
+        matches!(self, Field::TimerClear | Field::PresetAction)
+    }
+
     /// Rows that lead somewhere instead of changing in place. They get a ">"
     /// on the list and swallow Back on the way out.
     pub fn opens(self) -> bool {
@@ -310,8 +318,8 @@ impl AcState {
                 }
                 InputKeyOk => type_ == InputTypeLong,
                 InputKeyLeft | InputKeyRight => {
-                    if self.field.opens() {
-                        // The row leads somewhere rather than transmitting.
+                    if self.field.opens() || self.field.acts() {
+                        // The row leads somewhere, or waits for OK.
                         false
                     } else if self.field == Field::Preset {
                         // Switching preset swaps the whole state, so it sends —
@@ -379,7 +387,7 @@ impl AcState {
             // or is a preset step that changes nothing on the unit.
             if self.field.opens() {
                 self.open();
-            } else {
+            } else if !self.field.acts() {
                 self.step(key == InputKeyRight);
             }
             return;
@@ -483,12 +491,8 @@ impl AcState {
 
         match self.field {
             Field::Preset => return self.switch_preset(forward),
-            // Acts rather than holding a value, so either arrow does it.
-            Field::PresetAction => return self.reset_preset(),
             Field::OffAt => return self.step_timer(false, forward),
             Field::OnAt => return self.step_timer(true, forward),
-            // Acts rather than holding a value, so either arrow does it.
-            Field::TimerClear => return self.clear_timers(),
             _ => {}
         }
 
@@ -497,7 +501,9 @@ impl AcState {
             // Handled by a picker; `sends` never routes these here.
             Field::Mode | Field::Run => return,
             // Handled above, before the borrow.
-            Field::Preset | Field::PresetAction => {}
+            Field::Preset => {}
+            // Wait for OK; `sends` and `navigate` both route arrows away.
+            Field::PresetAction => {}
             Field::Temp => {
                 let temp = if forward {
                     (ac.temp() + 1).min(MAX_TEMP)
@@ -514,7 +520,7 @@ impl AcState {
                 };
                 ac.set_fan(fan);
             }
-            // Lead somewhere or act; `sends` never routes these here.
+            // Leads somewhere or waits for OK; no arrow reaches these.
             Field::Timer | Field::TimerClear => {}
             // Handled above, before the borrow.
             Field::OffAt | Field::OnAt => {}
