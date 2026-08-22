@@ -313,7 +313,10 @@ impl AcState {
             Some(_) => key == InputKeyOk && type_ == InputTypeShort,
             None => match key {
                 // Tap toggles power, hold resends; both transmit everything.
-                InputKeyOk => type_ == InputTypeShort || type_ == InputTypeLong,
+                // Except on a row that leads somewhere: there a tap opens it,
+                // the same as the arrows already do.
+                InputKeyOk if type_ == InputTypeShort => !self.field.opens(),
+                InputKeyOk => type_ == InputTypeLong,
                 InputKeyLeft | InputKeyRight => {
                     if self.field.opens() {
                         // The row leads somewhere rather than transmitting.
@@ -362,18 +365,21 @@ impl AcState {
             return;
         }
 
+        // OK only reaches here on a row that opens; `sends` keeps the rest.
+        if key == InputKeyOk {
+            if type_ == InputTypeShort {
+                self.open();
+            }
+            return;
+        }
+
         if key != InputKeyLeft && key != InputKeyRight {
             return;
         }
 
         if type_ == InputTypeShort {
             // Only a row that opens gets here; `sends` routed the rest away.
-            if let Some(picker) = self.field.picker() {
-                self.menu = Some((picker, picker.current(&self.daikin)));
-            } else if self.field == Field::Timer {
-                self.view = View::Timers;
-                self.field = TIMER_FIELDS[0];
-            }
+            self.open();
             return;
         }
 
@@ -381,6 +387,17 @@ impl AcState {
         if (type_ == InputTypeLong || type_ == InputTypeRepeat) && self.field.repeats() {
             self.step(key == InputKeyRight);
             self.repeating = true;
+        }
+    }
+
+    /// Step into whatever the focused row leads to. Both OK and the arrows
+    /// come through here, so the two can't drift apart.
+    fn open(&mut self) {
+        if let Some(picker) = self.field.picker() {
+            self.menu = Some((picker, picker.current(&self.daikin)));
+        } else if self.field == Field::Timer {
+            self.view = View::Timers;
+            self.field = TIMER_FIELDS[0];
         }
     }
 
@@ -559,6 +576,8 @@ impl AcState {
             return;
         }
 
+        // A row that opens never reaches here on a tap — `sends` sent it to
+        // `navigate` instead.
         // `Clear` is the one row that acts on OK rather than toggling power.
         // Power is still a tap away on any other row.
         if self.field == Field::TimerClear {
