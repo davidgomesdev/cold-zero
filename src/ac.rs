@@ -4,17 +4,15 @@
 //! here sends the whole frame straight away, exactly like the physical remote
 //! does. See [`crate::daikin`] for the wire format.
 
-use crate::daikin::{self, Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode, STATE_LEN};
+use crate::daikin::{self, Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode};
 use crate::icons;
+use crate::presets::Presets;
 use core::ffi::CStr;
 use flipperzero::furi::hal::rtc::datetime;
-use flipperzero::io::{Read, Write};
-use flipperzero::storage::{File, Storage};
-use flipperzero::{info, warn};
+use flipperzero::info;
 use flipperzero_sys::{
     InputKey, InputKeyDown, InputKeyLeft, InputKeyOk, InputKeyRight, InputKeyUp, InputType,
     InputTypeLong, InputTypePress, InputTypeRelease, InputTypeRepeat, InputTypeShort,
-    storage_common_mkdir,
 };
 
 /// Minutes past midnight, right now. The A/C's timers run off the clock every
@@ -25,14 +23,10 @@ pub fn minutes_now() -> u16 {
     time.hour as u16 * 60 + time.minute as u16
 }
 
-/// Where the remembered state lives. `/ext/apps_data` is always there; the
-/// per-app directory under it may not be, so saving creates it.
-const STATE_DIR: &CStr = c"/ext/apps_data/cold-zero";
-const STATE_PATH: &CStr = c"/ext/apps_data/cold-zero/ac.bin";
-
 /// The editable rows, top to bottom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
+    Preset,
     Mode,
     Temp,
     Fan,
@@ -47,10 +41,14 @@ pub enum Field {
     Comfort,
     Presence,
     Clean,
+    /// The last row: what to do with the preset being edited.
+    PresetAction,
 }
 
 /// The main list.
-pub const FIELDS: [Field; 11] = [
+pub const FIELDS: [Field; 13] = [
+    // Which preset everything below belongs to, so it reads top down.
+    Field::Preset,
     Field::Mode,
     Field::Temp,
     Field::Fan,
@@ -63,6 +61,7 @@ pub const FIELDS: [Field; 11] = [
     Field::SwingV,
     Field::SwingH,
     Field::Presence,
+    Field::PresetAction,
 ];
 
 /// The Timer row's own list. Two independent times is one too many for a row,
@@ -89,6 +88,10 @@ impl View {
 impl Field {
     pub fn label(self) -> &'static CStr {
         match self {
+            Field::Preset => c"Preset",
+            // Reads "Reset default" or "Delete preset" depending on which one
+            // is loaded; `AcState::action_label` picks.
+            Field::PresetAction => c"",
             Field::Mode => c"Mode",
             Field::Temp => c"Temp",
             Field::Fan => c"Fan",
@@ -230,6 +233,8 @@ impl Picker {
 
 pub struct AcState {
     pub daikin: Daikin,
+    /// The named states. `daikin` is always the selected one's, unpacked.
+    pub presets: Presets,
     /// Which list is showing. The cursor lives in `field`, which always points
     /// into `view.fields()`.
     pub view: View,
@@ -248,6 +253,7 @@ impl Default for AcState {
     fn default() -> Self {
         AcState {
             daikin: Daikin::default(),
+            presets: Presets::load(),
             view: View::Settings,
             field: Field::Mode,
             menu: None,
@@ -267,38 +273,18 @@ impl AcState {
     /// still desyncs it, and `Hold OK` is still the way back.
     pub fn load() -> Self {
         let mut state = AcState::default();
-
-        let mut raw = [0u8; STATE_LEN];
-        match File::open(STATE_PATH).and_then(|mut file| file.read(&mut raw)) {
-            // A short read means a truncated file, so treat it like corruption.
-            Ok(STATE_LEN) => match Daikin::from_raw(raw) {
-                Some(daikin) => {
-                    info!("A/C: restored the saved state");
-                    state.daikin = daikin;
-                }
-                None => warn!("A/C: saved state is corrupt, starting fresh"),
-            },
-            Ok(read) => warn!("A/C: saved state is {} bytes, starting fresh", read),
-            // Overwhelmingly just "no file yet", i.e. the first ever launch.
-            Err(_) => info!("A/C: no saved state, starting fresh"),
-        }
-
+        // The presets are loaded by `default`; the live state is whichever one
+        // was selected when the app last closed.
+        state.daikin = Daikin::from_raw(*state.presets.current().raw()).unwrap_or_default();
         state
     }
 
-    /// Best-effort: a Flipper with no SD card still has to work, so a failure
-    /// here is logged and dropped rather than propagated.
-    fn save(&self) {
-        unsafe { storage_common_mkdir(Storage::open().as_ptr(), STATE_DIR.as_ptr()) };
-
-        let saved = File::create(STATE_PATH).and_then(|mut file| {
-            file.write_all(self.daikin.raw())?;
-            file.flush()
-        });
-
-        if saved.is_err() {
-            warn!("A/C: could not save the state");
-        }
+    /// Every save writes the live state back into the preset it belongs to,
+    /// so the file and the app's belief can't come apart.
+    fn save(&mut self) {
+        let raw = *self.daikin.raw();
+        self.presets.store(raw);
+        self.presets.save();
     }
 
     /// Whether a press will put a frame on the air. The caller needs to know
@@ -317,12 +303,21 @@ impl AcState {
                 // Tap toggles power, hold resends; both transmit everything.
                 // Except on a row that leads somewhere: there a tap opens it,
                 // the same as the arrows already do.
-                InputKeyOk if type_ == InputTypeShort => !self.field.opens(),
+                // "Create..." asks for a name instead; nothing goes out until
+                // the preset exists.
+                InputKeyOk if type_ == InputTypeShort => {
+                    !self.field.opens() && !self.creating()
+                }
                 InputKeyOk => type_ == InputTypeLong,
                 InputKeyLeft | InputKeyRight => {
                     if self.field.opens() {
                         // The row leads somewhere rather than transmitting.
                         false
+                    } else if self.field == Field::Preset {
+                        // Switching preset swaps the whole state, so it sends —
+                        // unless the step lands on "Create...", which is a slot
+                        // rather than a state.
+                        type_ == InputTypeShort && self.presets.lands(key == InputKeyRight)
                     } else if type_ == InputTypeShort {
                         true
                     } else {
@@ -380,8 +375,13 @@ impl AcState {
         }
 
         if type_ == InputTypeShort {
-            // Only a row that opens gets here; `sends` routed the rest away.
-            self.open();
+            // `sends` routes every other row away, so what is left either opens
+            // or is a preset step that changes nothing on the unit.
+            if self.field.opens() {
+                self.open();
+            } else {
+                self.step(key == InputKeyRight);
+            }
             return;
         }
 
@@ -458,6 +458,9 @@ impl AcState {
             index.saturating_sub(1)
         };
         self.field = fields[index];
+        if self.field != Field::Preset {
+            self.presets.leave();
+        }
     }
 
     /// Left/Right change the selected row and put the new state on the air.
@@ -479,6 +482,9 @@ impl AcState {
         info!("A/C: adjusting a setting");
 
         match self.field {
+            Field::Preset => return self.switch_preset(forward),
+            // Acts rather than holding a value, so either arrow does it.
+            Field::PresetAction => return self.reset_preset(),
             Field::OffAt => return self.step_timer(false, forward),
             Field::OnAt => return self.step_timer(true, forward),
             // Acts rather than holding a value, so either arrow does it.
@@ -490,6 +496,8 @@ impl AcState {
         match self.field {
             // Handled by a picker; `sends` never routes these here.
             Field::Mode | Field::Run => return,
+            // Handled above, before the borrow.
+            Field::Preset | Field::PresetAction => {}
             Field::Temp => {
                 let temp = if forward {
                     (ac.temp() + 1).min(MAX_TEMP)
@@ -585,13 +593,22 @@ impl AcState {
 
         // A row that opens never reaches here on a tap — `sends` sent it to
         // `navigate` instead.
-        // `Clear` is the one row that acts on OK rather than toggling power.
+        // The rows that act on OK rather than toggling power. Power is still
+        // a tap away on any of the others.
         // Power is still a tap away on any other row.
-        if self.field == Field::TimerClear {
-            info!("A/C: clearing the timers");
-            self.clear_timers();
-            self.send();
-            return;
+        match self.field {
+            Field::TimerClear => {
+                info!("A/C: clearing the timers");
+                self.clear_timers();
+                self.send();
+                return;
+            }
+            Field::PresetAction => {
+                self.reset_preset();
+                self.send();
+                return;
+            }
+            _ => {}
         }
 
         self.toggle_power();
@@ -606,6 +623,51 @@ impl AcState {
 
     /// Stamp the frame with the Flipper's clock — the real remote does, and the
     /// A/C's own timers run off it — then transmit.
+    /// Load a neighbouring preset. Every row below the Preset row belongs to
+    /// whichever one is showing, so this swaps all thirty-five bytes at once.
+    fn switch_preset(&mut self, forward: bool) {
+        let Some(raw) = self.presets.step(forward) else {
+            // Stepped onto "Create...", which holds no state: the live one
+            // stays put until OK makes a preset out of it.
+            return;
+        };
+        info!("A/C: switching preset");
+        self.daikin = Daikin::from_raw(raw).unwrap_or_default();
+    }
+
+    /// The last row: a built-in goes back to how it shipped, a custom one goes
+    /// away. Either way the live state belongs to a different preset after.
+    fn reset_preset(&mut self) {
+        info!("A/C: resetting or deleting a preset");
+        let raw = self.presets.reset_or_delete();
+        self.daikin = Daikin::from_raw(raw).unwrap_or_default();
+    }
+
+    /// Whether OK on the focused row means "name a new preset". The naming
+    /// prompt is a whole GUI view of its own, so it lives in `main` and this is
+    /// how it knows to run.
+    pub fn creating(&self) -> bool {
+        self.field == Field::Preset && self.presets.creating()
+    }
+
+    /// A new preset holds what is on screen now, so nothing is transmitted:
+    /// the A/C is already in that state.
+    pub fn create_preset(&mut self, name: &[u8]) {
+        info!("A/C: creating a preset");
+        let raw = *self.daikin.raw();
+        self.presets.create(name, raw);
+    }
+
+    /// The last row says what it will do, which depends on whether the loaded
+    /// preset is one of the two that ship with the app.
+    pub fn action_label(&self) -> &'static CStr {
+        if self.presets.builtin() {
+            c"Reset default"
+        } else {
+            c"Delete preset"
+        }
+    }
+
     pub fn send(&mut self) {
         let time = datetime();
         self.daikin.set_current_time(minutes_now());
