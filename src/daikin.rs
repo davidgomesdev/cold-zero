@@ -34,9 +34,15 @@ pub const MAX_TEMP: u8 = 32;
 /// Minutes in a day. Both timers and the frame's clock are stored as minutes
 /// past midnight, so this is the modulus for all of it.
 pub const DAY: u16 = 24 * 60;
-/// How far one arrow press moves a timer, and how far the "+1 hour" row does.
+/// How far one arrow press moves a timer.
 pub const TIMER_STEP: u16 = 30;
-pub const TIMER_HOUR: u16 = 60;
+
+/// How far ahead of `now` a timer is set for, in minutes. Wrapping the
+/// subtraction is what lets a target past midnight read as "in 3h" rather than
+/// "twenty hours ago".
+pub fn minutes_ahead(now: u16, time: u16) -> u16 {
+    (time % DAY + DAY - now % DAY) % DAY
+}
 
 /// Step a timer one notch, in the direction given.
 ///
@@ -46,18 +52,16 @@ pub const TIMER_HOUR: u16 = 60;
 /// durations though, so stepping happens in "minutes from now" and converts
 /// back. `current` is the time the timer is set for, or `None` when it is off;
 /// the return says the same about where it should land.
-pub fn next_timer(now: u16, current: Option<u16>, forward: bool, step: u16) -> Option<u16> {
-    // Wrapping the subtraction is what lets a target past midnight read as
-    // "in 3h" rather than "twenty hours ago".
+pub fn next_timer(now: u16, current: Option<u16>, forward: bool) -> Option<u16> {
     let ahead = match current {
-        Some(time) => (time % DAY + DAY - now % DAY) % DAY,
+        Some(time) => minutes_ahead(now, time),
         None => 0,
     };
 
     let ahead = if forward {
-        ahead + step
+        ahead + TIMER_STEP
     } else {
-        ahead.saturating_sub(step)
+        ahead.saturating_sub(TIMER_STEP)
     };
 
     // Stepping down through zero switches the timer off. A full day is as far
