@@ -4,7 +4,7 @@
 //! here sends the whole frame straight away, exactly like the physical remote
 //! does. See [`crate::daikin`] for the wire format.
 
-use crate::daikin::{Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode, STATE_LEN};
+use crate::daikin::{self, Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode, STATE_LEN};
 use crate::icons;
 use core::ffi::CStr;
 use flipperzero::furi::hal::rtc::datetime;
@@ -17,6 +17,14 @@ use flipperzero_sys::{
     storage_common_mkdir,
 };
 
+/// Minutes past midnight, right now. The A/C's timers run off the clock every
+/// frame carries, so this is both what gets stamped and what timers are
+/// measured from.
+pub fn minutes_now() -> u16 {
+    let time = datetime();
+    time.hour as u16 * 60 + time.minute as u16
+}
+
 /// Where the remembered state lives. `/ext/apps_data` is always there; the
 /// per-app directory under it may not be, so saving creates it.
 const STATE_DIR: &CStr = c"/ext/apps_data/cold-zero";
@@ -28,6 +36,8 @@ pub enum Field {
     Mode,
     Temp,
     Fan,
+    OffAt,
+    OnAt,
     SwingV,
     SwingH,
     Run,
@@ -37,10 +47,12 @@ pub enum Field {
     Clean,
 }
 
-pub const FIELDS: [Field; 10] = [
+pub const FIELDS: [Field; 12] = [
     Field::Mode,
     Field::Temp,
     Field::Fan,
+    Field::OffAt,
+    Field::OnAt,
     // The ones that get used often enough to want them near the top.
     Field::Comfort,
     Field::Clean,
@@ -57,6 +69,8 @@ impl Field {
             Field::Mode => c"Mode",
             Field::Temp => c"Temp",
             Field::Fan => c"Fan",
+            Field::OffAt => c"Off at",
+            Field::OnAt => c"On at",
             Field::SwingV => c"Swing V",
             Field::SwingH => c"Swing H",
             Field::Run => c"Run",
@@ -77,7 +91,7 @@ impl Field {
     /// repeating it would just toggle at 10Hz and land wherever the release
     /// happened to fall.
     pub fn repeats(self) -> bool {
-        matches!(self, Field::Temp | Field::Fan)
+        matches!(self, Field::Temp | Field::Fan | Field::OffAt | Field::OnAt)
     }
 
     /// Rows whose values are named rather than numeric or on/off. They open a
@@ -393,6 +407,12 @@ impl AcState {
     fn step(&mut self, forward: bool) {
         info!("A/C: adjusting a setting");
 
+        match self.field {
+            Field::OffAt => return self.step_timer(false, forward),
+            Field::OnAt => return self.step_timer(true, forward),
+            _ => {}
+        }
+
         let ac = &mut self.daikin;
         match self.field {
             // Handled by a picker; `sends` never routes these here.
@@ -413,6 +433,8 @@ impl AcState {
                 };
                 ac.set_fan(fan);
             }
+            // Handled above, before the borrow.
+            Field::OffAt | Field::OnAt => {}
             // The rest are flags, so either direction is just a toggle.
             Field::SwingV => ac.set_swing_vertical(!ac.swing_vertical()),
             Field::SwingH => ac.set_swing_horizontal(!ac.swing_horizontal()),
@@ -421,6 +443,27 @@ impl AcState {
             Field::Presence => ac.set_sensor(!ac.sensor()),
             Field::Clean => ac.set_mold(!ac.mold()),
         }
+    }
+
+    fn step_timer(&mut self, on_timer: bool, forward: bool) {
+        let next = daikin::next_timer(minutes_now(), self.timer_at(on_timer), forward);
+
+        match (on_timer, next) {
+            (true, Some(at)) => self.daikin.enable_on_timer(at),
+            (true, None) => self.daikin.disable_on_timer(),
+            (false, Some(at)) => self.daikin.enable_off_timer(at),
+            (false, None) => self.daikin.disable_off_timer(),
+        }
+    }
+
+    /// The clock time a timer will fire at, or `None` when it is off.
+    pub fn timer_at(&self, on_timer: bool) -> Option<u16> {
+        let (enabled, time) = if on_timer {
+            (self.daikin.on_timer(), self.daikin.on_time())
+        } else {
+            (self.daikin.off_timer(), self.daikin.off_time())
+        };
+        enabled.then_some(time)
     }
 
     pub fn toggle_power(&mut self) {
@@ -434,8 +477,7 @@ impl AcState {
     /// A/C's own timers run off it — then transmit.
     pub fn send(&mut self) {
         let time = datetime();
-        self.daikin
-            .set_current_time(time.hour as u16 * 60 + time.minute as u16);
+        self.daikin.set_current_time(minutes_now());
         // Furi counts Monday as 1; the remote counts Sunday as 1.
         self.daikin.set_current_day(time.weekday % 7 + 1);
         self.daikin.send();
@@ -466,6 +508,7 @@ impl AcState {
     pub fn flag(&self, field: Field) -> Option<bool> {
         let ac = &self.daikin;
         match field {
+            Field::OffAt | Field::OnAt => None,
             Field::SwingV => Some(ac.swing_vertical()),
             Field::SwingH => Some(ac.swing_horizontal()),
             Field::Quiet => Some(ac.quiet()),
