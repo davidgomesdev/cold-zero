@@ -39,7 +39,6 @@ pub enum Field {
     Timer,
     OffAt,
     OnAt,
-    TimerBump,
     TimerClear,
     SwingV,
     SwingH,
@@ -69,12 +68,7 @@ pub const FIELDS: [Field; 11] = [
 /// The Timer row's own list. Two independent times is one too many for a row,
 /// and neither is a choice from a set, so this is a sub-list rather than a
 /// [`Picker`].
-pub const TIMER_FIELDS: [Field; 4] = [
-    Field::OffAt,
-    Field::OnAt,
-    Field::TimerBump,
-    Field::TimerClear,
-];
+pub const TIMER_FIELDS: [Field; 3] = [Field::OffAt, Field::OnAt, Field::TimerClear];
 
 /// Which list the A/C screen is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,7 +95,6 @@ impl Field {
             Field::Timer => c"Timer",
             Field::OffAt => c"Off at",
             Field::OnAt => c"On at",
-            Field::TimerBump => c"+1 hour",
             Field::TimerClear => c"Clear",
             Field::SwingV => c"Swing V",
             Field::SwingH => c"Swing H",
@@ -123,10 +116,7 @@ impl Field {
     /// repeating it would just toggle at 10Hz and land wherever the release
     /// happened to fall.
     pub fn repeats(self) -> bool {
-        matches!(
-            self,
-            Field::Temp | Field::Fan | Field::OffAt | Field::OnAt | Field::TimerBump
-        )
+        matches!(self, Field::Temp | Field::Fan | Field::OffAt | Field::OnAt)
     }
 
     /// Rows that lead somewhere instead of changing in place. They get a ">"
@@ -472,8 +462,7 @@ impl AcState {
         match self.field {
             Field::OffAt => return self.step_timer(false, forward),
             Field::OnAt => return self.step_timer(true, forward),
-            // Rows that act rather than hold a value, so either arrow does it.
-            Field::TimerBump => return self.bump_timers(),
+            // Acts rather than holding a value, so either arrow does it.
             Field::TimerClear => return self.clear_timers(),
             _ => {}
         }
@@ -499,7 +488,7 @@ impl AcState {
                 ac.set_fan(fan);
             }
             // Lead somewhere or act; `sends` never routes these here.
-            Field::Timer | Field::TimerBump | Field::TimerClear => {}
+            Field::Timer | Field::TimerClear => {}
             // Handled above, before the borrow.
             Field::OffAt | Field::OnAt => {}
             // The rest are flags, so either direction is just a toggle.
@@ -513,12 +502,7 @@ impl AcState {
     }
 
     fn step_timer(&mut self, on_timer: bool, forward: bool) {
-        let next = daikin::next_timer(
-            minutes_now(),
-            self.timer_at(on_timer),
-            forward,
-            daikin::TIMER_STEP,
-        );
+        let next = daikin::next_timer(minutes_now(), self.timer_at(on_timer), forward);
 
         match (on_timer, next) {
             (true, Some(at)) => self.daikin.enable_on_timer(at),
@@ -528,33 +512,16 @@ impl AcState {
         }
     }
 
-    /// Push every armed timer an hour later. A timer that is off stays off:
-    /// there is nothing to advance, and arming one from a row labelled
-    /// "+1 hour" would be a surprise.
-    fn bump_timers(&mut self) {
-        let now = minutes_now();
-
-        for on_timer in [false, true] {
-            let Some(at) = self.timer_at(on_timer) else {
-                continue;
-            };
-            // Shares `next_timer` for the day cap: an hour past "in 23h" would
-            // otherwise wrap round to "about to fire".
-            let Some(at) = daikin::next_timer(now, Some(at), true, daikin::TIMER_HOUR) else {
-                continue;
-            };
-
-            if on_timer {
-                self.daikin.enable_on_timer(at);
-            } else {
-                self.daikin.enable_off_timer(at);
-            }
-        }
-    }
-
     fn clear_timers(&mut self) {
         self.daikin.disable_on_timer();
         self.daikin.disable_off_timer();
+    }
+
+    /// How far off a timer is, for the caption under its row. `None` when the
+    /// timer is off and there is nothing to count down to.
+    pub fn timer_ahead(&self, on_timer: bool) -> Option<u16> {
+        self.timer_at(on_timer)
+            .map(|at| daikin::minutes_ahead(minutes_now(), at))
     }
 
     /// The Timer row just says whether anything is armed; the times themselves
@@ -620,7 +587,7 @@ impl AcState {
         let ac = &self.daikin;
         match field {
             Field::Timer | Field::OffAt | Field::OnAt => None,
-            Field::TimerBump | Field::TimerClear => None,
+            Field::TimerClear => None,
             Field::SwingV => Some(ac.swing_vertical()),
             Field::SwingH => Some(ac.swing_horizontal()),
             Field::Quiet => Some(ac.quiet()),

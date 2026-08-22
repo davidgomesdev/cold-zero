@@ -63,9 +63,9 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 
 The `Timer` row leads to a sub-list holding `Off at` and `On at`, the protocol's two timers. Two independent times is one too many for a single row, and neither is a choice from a set, so it is a sub-list (`View::Timers`) rather than a [`Picker`] — the cursor in `AcState::field` always points into `view.fields()`. The row itself only says whether anything is armed: `On` or `-`.
 
-Inside are four rows: `Off at`, `On at`, then `+1 hour` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. Each time row shows the clock time it fires at, or `--`.
+Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so either arrow triggers it — the same convention the flag rows already use — and it disables both.
 
-The last two act rather than hold a value, so either arrow triggers them — the same convention the flag rows already use. `+1 hour` pushes every *armed* timer an hour later and leaves a disabled one alone: there is nothing to advance, and arming one from a row labelled "+1 hour" would be a surprise. It goes through the same `daikin::next_timer` as the arrows, at a coarser step, so it inherits the day cap.
+Each armed timer shows two lines: the clock time it fires at, and a caption saying how far off that is (`in 2h30`). The stored value is absolute, which is what makes a retransmit idempotent, so the caption is derived at paint time from `daikin::minutes_ahead` rather than stored. That means the sub-list needs its own layout (`draw_timers`) instead of the settings list's plain row loop, and the selection highlight grows to 19px to cover both lines when a timer is armed.
 
 Back unwinds one level at a time — picker, then sub-list, then the screen — through `AcState::go_back`.
 

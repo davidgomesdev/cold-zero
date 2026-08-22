@@ -15,7 +15,7 @@ mod ir;
 mod notification;
 mod state;
 
-use crate::ac::{Field, Picker, View};
+use crate::ac::{FIELDS, Field, Picker, View};
 use crate::bulbs::BulbsState;
 use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
@@ -554,6 +554,81 @@ unsafe fn draw_menu(canvas: *mut Canvas, ac: &AcState, picker: Picker, selected:
     }
 }
 
+/// The timer sub-list. Each time gets two lines — the clock time it fires at,
+/// and how far off that is — so it needs its own layout rather than the plain
+/// row loop the settings list uses.
+const TIMER_ROWS: [(Field, i32); 3] = [
+    (Field::OffAt, 24),
+    (Field::OnAt, 52),
+    (Field::TimerClear, 80),
+];
+
+unsafe fn draw_timers(canvas: *mut Canvas, ac: &AcState) {
+    unsafe {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str_aligned(canvas, AC_WIDTH / 2, 0, AlignCenter, AlignTop, c"Timer".as_ptr());
+        canvas_set_font(canvas, FontSecondary);
+
+        for (field, y) in TIMER_ROWS {
+            let on_timer = field == Field::OnAt;
+            let ahead = if field == Field::TimerClear {
+                None
+            } else {
+                ac.timer_ahead(on_timer)
+            };
+
+            // The caption only exists once a timer is armed, and the highlight
+            // has to grow to cover it so the two read as one row.
+            if field == ac.field {
+                let height = if ahead.is_some() { 19 } else { 9 };
+                canvas_draw_box(canvas, 0, y - 7, AC_WIDTH as usize + 1, height);
+                canvas_set_color(canvas, ColorWhite);
+            }
+
+            canvas_draw_str_aligned(canvas, 1, y, AlignLeft, AlignBottom, field.label().as_ptr());
+
+            if field != Field::TimerClear {
+                let owned;
+                let value = match ac.timer_at(on_timer) {
+                    Some(mins) => {
+                        owned = format!("{:02}:{:02}\0", mins / 60, mins % 60);
+                        owned.as_ptr()
+                    }
+                    None => c"--".as_ptr(),
+                };
+                canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, value);
+
+                if let Some(ahead) = ahead {
+                    let caption = format!("{}\0", Ahead(ahead));
+                    canvas_draw_str_aligned(
+                        canvas,
+                        6,
+                        y + 10,
+                        AlignLeft,
+                        AlignBottom,
+                        caption.as_ptr(),
+                    );
+                }
+            }
+
+            canvas_set_color(canvas, ColorBlack);
+        }
+    }
+}
+
+/// "in 2h30" / "in 3h" / "in 45m", from a count of minutes.
+struct Ahead(u16);
+
+impl core::fmt::Display for Ahead {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match (self.0 / 60, self.0 % 60) {
+            (0, m) => write!(f, "in {m}m"),
+            (h, 0) => write!(f, "in {h}h"),
+            (h, m) => write!(f, "in {h}h{m:02}"),
+        }
+    }
+}
+
 unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
     let ac = &app_state.ac_state;
 
@@ -562,17 +637,22 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
         return;
     }
 
+    if ac.view == View::Timers {
+        unsafe { draw_timers(canvas, ac) };
+        return;
+    }
+
     unsafe {
         canvas_set_font(canvas, FontPrimary);
-        let title = match ac.view {
-            View::Timers => c"Timer".as_ptr(),
-            View::Settings if ac.daikin.power() => c"A/C ON".as_ptr(),
-            View::Settings => c"A/C OFF".as_ptr(),
+        let title = if ac.daikin.power() {
+            c"A/C ON".as_ptr()
+        } else {
+            c"A/C OFF".as_ptr()
         };
         canvas_draw_str_aligned(canvas, AC_WIDTH / 2, 0, AlignCenter, AlignTop, title);
         canvas_set_font(canvas, FontSecondary);
 
-        for (index, field) in ac.view.fields().iter().enumerate() {
+        for (index, field) in FIELDS.iter().enumerate() {
             let y = 18 + index as i32 * 9;
 
             if *field == ac.field {
@@ -596,18 +676,6 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                     (Field::Temp, _) => {
                         owned = format!("{}C\0", ac.daikin.temp());
                         owned.as_ptr()
-                    }
-                    // The clock time it fires at, not a countdown: the stored
-                    // value is absolute, and a countdown would go stale between
-                    // repaints anyway.
-                    (Field::OffAt | Field::OnAt, _) => {
-                        match ac.timer_at(*field == Field::OnAt) {
-                            Some(mins) => {
-                                owned = format!("{:02}:{:02}\0", mins / 60, mins % 60);
-                                owned.as_ptr()
-                            }
-                            None => c"--".as_ptr(),
-                        }
                     }
                     _ => c"".as_ptr(),
                 },
