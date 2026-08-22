@@ -61,7 +61,11 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 
 ### A/C timers
 
-`Off at` and `On at` drive the protocol's two timers. Left/Right step them in 30-minute notches, holding repeats, and stepping down through zero switches the timer off. The row shows the clock time it fires at, or `--`.
+The `Timer` row leads to a sub-list holding `Off at` and `On at`, the protocol's two timers. Two independent times is one too many for a single row, and neither is a choice from a set, so it is a sub-list (`View::Timers`) rather than a [`Picker`] — the cursor in `AcState::field` always points into `view.fields()`. The row itself only says whether anything is armed: `On` or `-`.
+
+Inside, Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. Each row shows the clock time it fires at, or `--`.
+
+Back unwinds one level at a time — picker, then sub-list, then the screen — through `AcState::go_back`.
 
 The wire format stores an absolute time of day, and so does this — `daikin::next_timer` converts to "minutes from now" only for the duration of a step. That is what makes a retransmit idempotent: if a duration were recomputed on every send, touching an unrelated row would restart the countdown. It also means the displayed value is a fixed clock time rather than a countdown, which is honest about what the A/C was actually told.
 
