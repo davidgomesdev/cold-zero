@@ -47,14 +47,14 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power, or the focused row's action — open it if it leads somewhere · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
+| A/C | short: power, or the focused row's action — open it if it leads somewhere · long: power on and resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
 
 `key_sends` decides which of those actually transmit; everything else (home navigation, walking the A/C list) skips the blue blink and the "Changing..." overlay. The A/C answers for itself through `AcState::sends`, because there it depends on the selected row and on whether the mode picker is open — that predicate lives next to the handlers it describes so the two can't drift apart.
 
-Two rows have named values rather than a number or a flag, so instead of cycling blind they open a picker with an icon per option (`AcState::menu`, `Picker`). OK and the arrows both step into a row that leads somewhere, through the one `AcState::open`; on those rows OK does not toggle power, because a row with a `>` on it that ignored OK read as broken. Back closes the picker before it closes the screen.
+Two rows have named values rather than a number or a flag, so instead of cycling blind they open a picker with an icon per option (`AcState::menu`, `Picker`). OK and the arrows both step into a row that leads somewhere, through the one `AcState::open`; on those rows OK does not toggle power, because a row with a `>` on it that ignored OK read as broken. Holding OK is the exception that answers from anywhere — any row, and inside a picker — and always means the same thing: power on, then send all 35 bytes. It is the way back in sync after the physical remote has been used, so it must not depend on where the cursor sits. Back closes the picker before it closes the screen.
 
 - **Mode** — auto, cool, heat, dry, fan.
 - **Run** — normal, eco, power. This one exists because the protocol won't hold eco and powerful at once (`set_powerful` clears econo, `set_econo` clears powerful). As two flag rows they silently switched each other off; as one row with three values the exclusion is the shape of the control rather than a surprise.
@@ -63,7 +63,7 @@ Two rows have named values rather than a number or a flag, so instead of cycling
 
 The `Timer` row leads to a sub-list holding `Off at` and `On at`, the protocol's two timers. Two independent times is one too many for a single row, and neither is a choice from a set, so it is a sub-list (`View::Timers`) rather than a [`Picker`] — the cursor in `AcState::field` always points into `view.fields()`. The row itself only says whether anything is armed: `On` or `-`.
 
-Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so either arrow triggers it — the same convention the flag rows already use — and it disables both. OK does the same thing there instead of toggling power, which is the one place OK means something other than power; `AcState::confirm` holds that decision so it sits next to the rows it depends on. Holding OK still means "resend as-is" everywhere, including there.
+Inside are `Off at`, `On at` and `Clear`. Left/Right step a timer in 30-minute notches, holding repeats, and stepping down through zero switches it off. `Clear` acts rather than holding a value, so either arrow triggers it — the same convention the flag rows already use — and it disables both. OK does the same thing there instead of toggling power; `AcState::confirm` holds that decision so it sits next to the rows it depends on. Holding OK still means "on, and resend" everywhere, including there.
 
 Each armed timer shows two lines: the clock time it fires at, and a caption saying how far off that is (`in 2h30`). The stored value is absolute, which is what makes a retransmit idempotent, so the caption is derived at paint time from `daikin::minutes_ahead` rather than stored. That means the sub-list needs its own layout (`draw_timers`) instead of the settings list's plain row loop, and the selection highlight grows to 19px to cover both lines when a timer is armed.
 
