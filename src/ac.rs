@@ -544,6 +544,33 @@ impl AcState {
         enabled.then_some(time)
     }
 
+    /// What OK does, which depends on where the cursor is: commit an open
+    /// picker, run the focused row's action if it has one, otherwise drive
+    /// power. Holding it always means "resend as-is", the only way back in sync
+    /// after someone has used the physical remote.
+    pub fn confirm(&mut self, long: bool) {
+        if self.menu.is_some() {
+            self.commit_menu();
+            return;
+        }
+
+        if long {
+            self.send();
+            return;
+        }
+
+        // `Clear` is the one row that acts on OK rather than toggling power.
+        // Power is still a tap away on any other row.
+        if self.field == Field::TimerClear {
+            info!("A/C: clearing the timers");
+            self.clear_timers();
+            self.send();
+            return;
+        }
+
+        self.toggle_power();
+    }
+
     pub fn toggle_power(&mut self) {
         info!("A/C: toggling power");
         let on = self.daikin.power();

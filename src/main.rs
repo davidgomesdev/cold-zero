@@ -344,20 +344,12 @@ fn handle_heater_ok_press(
     }
 }
 
-/// OK toggles power. Holding it resends the state unchanged, which is the only
-/// way back in sync after someone has used the physical remote.
-#[allow(non_upper_case_globals)]
+/// OK mostly toggles power, but the A/C screen has rows it means something else
+/// on, so the decision lives next to them in [`AcState::confirm`].
 fn handle_ac_ok_press(app_state: &mut AppState, input_event: InputEvent) {
-    if app_state.ac_state.menu.is_some() {
-        app_state.ac_state.commit_menu();
-        return;
-    }
-
-    match input_event.type_ {
-        InputTypeShort => app_state.ac_state.toggle_power(),
-        InputTypeLong => app_state.ac_state.send(),
-        _ => {}
-    }
+    app_state
+        .ac_state
+        .confirm(input_event.type_ == InputTypeLong);
 }
 
 /// Left/Right change the selected row. Every change retransmits the whole
