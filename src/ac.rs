@@ -308,9 +308,11 @@ impl AcState {
     #[allow(non_upper_case_globals)]
     pub fn sends(&self, key: InputKey, type_: InputType) -> bool {
         match self.menu {
-            // In a picker only a tap on OK commits. Holding it would
-            // otherwise fall through to the power toggle.
-            Some(_) => key == InputKeyOk && type_ == InputTypeShort,
+            // In a picker a tap commits. Holding still means "on and resend",
+            // which has to work from anywhere.
+            Some(_) => {
+                key == InputKeyOk && (type_ == InputTypeShort || type_ == InputTypeLong)
+            }
             None => match key {
                 // Tap toggles power, hold resends; both transmit everything.
                 // Except on a row that leads somewhere: there a tap opens it,
@@ -563,16 +565,21 @@ impl AcState {
 
     /// What OK does, which depends on where the cursor is: commit an open
     /// picker, run the focused row's action if it has one, otherwise drive
-    /// power. Holding it always means "resend as-is", the only way back in sync
-    /// after someone has used the physical remote.
+    /// power. Holding it always means "on, and resend everything".
     pub fn confirm(&mut self, long: bool) {
-        if self.menu.is_some() {
-            self.commit_menu();
+        // Holding means the same thing from every row and from inside a
+        // picker: turn it on and put the whole state on the air. That is the
+        // one way back in sync after someone has used the physical remote, so
+        // it must not depend on where the cursor happens to be.
+        if long {
+            info!("A/C: powering on and resending");
+            self.daikin.set_power(true);
+            self.send();
             return;
         }
 
-        if long {
-            self.send();
+        if self.menu.is_some() {
+            self.commit_menu();
             return;
         }
 
