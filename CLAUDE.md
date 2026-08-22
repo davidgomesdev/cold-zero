@@ -47,14 +47,14 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power, or the focused row's action · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
+| A/C | short: power, or the focused row's action — open it if it leads somewhere · long: resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
 
 `key_sends` decides which of those actually transmit; everything else (home navigation, walking the A/C list) skips the blue blink and the "Changing..." overlay. The A/C answers for itself through `AcState::sends`, because there it depends on the selected row and on whether the mode picker is open — that predicate lives next to the handlers it describes so the two can't drift apart.
 
-Two rows have named values rather than a number or a flag, so instead of cycling blind they open a picker with an icon per option (`AcState::menu`, `Picker`). Back closes the picker before it closes the screen.
+Two rows have named values rather than a number or a flag, so instead of cycling blind they open a picker with an icon per option (`AcState::menu`, `Picker`). OK and the arrows both step into a row that leads somewhere, through the one `AcState::open`; on those rows OK does not toggle power, because a row with a `>` on it that ignored OK read as broken. Back closes the picker before it closes the screen.
 
 - **Mode** — auto, cool, heat, dry, fan.
 - **Run** — normal, eco, power. This one exists because the protocol won't hold eco and powerful at once (`set_powerful` clears econo, `set_econo` clears powerful). As two flag rows they silently switched each other off; as one row with three values the exclusion is the shape of the control rather than a surprise.
