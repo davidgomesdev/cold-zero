@@ -36,6 +36,7 @@ pub enum Field {
     Mode,
     Temp,
     Fan,
+    Timer,
     OffAt,
     OnAt,
     SwingV,
@@ -47,12 +48,12 @@ pub enum Field {
     Clean,
 }
 
-pub const FIELDS: [Field; 12] = [
+/// The main list.
+pub const FIELDS: [Field; 11] = [
     Field::Mode,
     Field::Temp,
     Field::Fan,
-    Field::OffAt,
-    Field::OnAt,
+    Field::Timer,
     // The ones that get used often enough to want them near the top.
     Field::Comfort,
     Field::Clean,
@@ -63,12 +64,34 @@ pub const FIELDS: [Field; 12] = [
     Field::Presence,
 ];
 
+/// The Timer row's own list. Two independent times is one too many for a row,
+/// and neither is a choice from a set, so this is a sub-list rather than a
+/// [`Picker`].
+pub const TIMER_FIELDS: [Field; 2] = [Field::OffAt, Field::OnAt];
+
+/// Which list the A/C screen is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Settings,
+    Timers,
+}
+
+impl View {
+    pub fn fields(self) -> &'static [Field] {
+        match self {
+            View::Settings => &FIELDS,
+            View::Timers => &TIMER_FIELDS,
+        }
+    }
+}
+
 impl Field {
     pub fn label(self) -> &'static CStr {
         match self {
             Field::Mode => c"Mode",
             Field::Temp => c"Temp",
             Field::Fan => c"Fan",
+            Field::Timer => c"Timer",
             Field::OffAt => c"Off at",
             Field::OnAt => c"On at",
             Field::SwingV => c"Swing V",
@@ -92,6 +115,12 @@ impl Field {
     /// happened to fall.
     pub fn repeats(self) -> bool {
         matches!(self, Field::Temp | Field::Fan | Field::OffAt | Field::OnAt)
+    }
+
+    /// Rows that lead somewhere instead of changing in place. They get a ">"
+    /// on the list and swallow Back on the way out.
+    pub fn opens(self) -> bool {
+        self.picker().is_some() || self == Field::Timer
     }
 
     /// Rows whose values are named rather than numeric or on/off. They open a
@@ -199,6 +228,9 @@ impl Picker {
 
 pub struct AcState {
     pub daikin: Daikin,
+    /// Which list is showing. The cursor lives in `field`, which always points
+    /// into `view.fields()`.
+    pub view: View,
     pub field: Field,
     /// The open picker and where its cursor sits, or `None` while none is open.
     pub menu: Option<(Picker, usize)>,
@@ -214,6 +246,7 @@ impl Default for AcState {
     fn default() -> Self {
         AcState {
             daikin: Daikin::default(),
+            view: View::Settings,
             field: Field::Mode,
             menu: None,
             repeating: false,
@@ -280,8 +313,8 @@ impl AcState {
                 // Tap toggles power, hold resends; both transmit everything.
                 InputKeyOk => type_ == InputTypeShort || type_ == InputTypeLong,
                 InputKeyLeft | InputKeyRight => {
-                    if self.field.picker().is_some() {
-                        // A picker row opens rather than transmitting.
+                    if self.field.opens() {
+                        // The row leads somewhere rather than transmitting.
                         false
                     } else if type_ == InputTypeShort {
                         true
@@ -332,9 +365,12 @@ impl AcState {
         }
 
         if type_ == InputTypeShort {
-            // Only a picker row gets here; `sends` routed the others away.
+            // Only a row that opens gets here; `sends` routed the rest away.
             if let Some(picker) = self.field.picker() {
                 self.menu = Some((picker, picker.current(&self.daikin)));
+            } else if self.field == Field::Timer {
+                self.view = View::Timers;
+                self.field = TIMER_FIELDS[0];
             }
             return;
         }
@@ -346,10 +382,23 @@ impl AcState {
         }
     }
 
-    /// Back inside a picker closes it rather than leaving the screen.
-    /// Returns whether there was a picker to close.
-    pub fn close_menu(&mut self) -> bool {
-        self.menu.take().is_some()
+    /// Back unwinds one level: a picker first, then the timer sub-list, and
+    /// only once both are gone does the screen itself close. Returns whether
+    /// this level swallowed the press.
+    pub fn go_back(&mut self) -> bool {
+        self.repeating = false;
+
+        if self.menu.take().is_some() {
+            return true;
+        }
+
+        if self.view == View::Timers {
+            self.view = View::Settings;
+            self.field = Field::Timer;
+            return true;
+        }
+
+        false
     }
 
     /// Tap-only, deliberately: these rings are three and five long, so holding
@@ -380,13 +429,14 @@ impl AcState {
     /// jumping across, and it is what makes holding Down mean "go to the
     /// bottom" rather than "spin".
     pub fn move_cursor(&mut self, down: bool) {
-        let index = FIELDS.iter().position(|f| *f == self.field).unwrap_or(0);
+        let fields = self.view.fields();
+        let index = fields.iter().position(|f| *f == self.field).unwrap_or(0);
         let index = if down {
-            (index + 1).min(FIELDS.len() - 1)
+            (index + 1).min(fields.len() - 1)
         } else {
             index.saturating_sub(1)
         };
-        self.field = FIELDS[index];
+        self.field = fields[index];
     }
 
     /// Left/Right change the selected row and put the new state on the air.
@@ -433,6 +483,8 @@ impl AcState {
                 };
                 ac.set_fan(fan);
             }
+            // Lead somewhere instead; `sends` never routes these here.
+            Field::Timer => {}
             // Handled above, before the borrow.
             Field::OffAt | Field::OnAt => {}
             // The rest are flags, so either direction is just a toggle.
@@ -453,6 +505,16 @@ impl AcState {
             (true, None) => self.daikin.disable_on_timer(),
             (false, Some(at)) => self.daikin.enable_off_timer(at),
             (false, None) => self.daikin.disable_off_timer(),
+        }
+    }
+
+    /// The Timer row just says whether anything is armed; the times themselves
+    /// are one level down.
+    pub fn timer_label(&self) -> &'static CStr {
+        if self.daikin.on_timer() || self.daikin.off_timer() {
+            c"On"
+        } else {
+            c"-"
         }
     }
 
@@ -508,7 +570,7 @@ impl AcState {
     pub fn flag(&self, field: Field) -> Option<bool> {
         let ac = &self.daikin;
         match field {
-            Field::OffAt | Field::OnAt => None,
+            Field::Timer | Field::OffAt | Field::OnAt => None,
             Field::SwingV => Some(ac.swing_vertical()),
             Field::SwingH => Some(ac.swing_horizontal()),
             Field::Quiet => Some(ac.quiet()),

@@ -15,7 +15,7 @@ mod ir;
 mod notification;
 mod state;
 
-use crate::ac::{FIELDS, Field, Picker};
+use crate::ac::{Field, Picker, View};
 use crate::bulbs::BulbsState;
 use crate::fan::{FanLight, FanMode, FanSpeed, FanState};
 use crate::notification::{DAYTIME_CHANGE, MANUAL_POWER_OFF, MANUAL_POWER_ON};
@@ -200,9 +200,9 @@ fn handle_key_presses(
                 InputTypeShort => {
                     if app_state.in_device
                         && app_state.active_device == ActiveDevice::Ac
-                        && app_state.ac_state.close_menu()
+                        && app_state.ac_state.go_back()
                     {
-                        // The mode picker swallowed it.
+                        // A submenu swallowed it.
                     } else if !app_state.in_device {
                         return false;
                     } else {
@@ -564,15 +564,15 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
 
     unsafe {
         canvas_set_font(canvas, FontPrimary);
-        let title = if ac.daikin.power() {
-            c"A/C ON".as_ptr()
-        } else {
-            c"A/C OFF".as_ptr()
+        let title = match ac.view {
+            View::Timers => c"Timer".as_ptr(),
+            View::Settings if ac.daikin.power() => c"A/C ON".as_ptr(),
+            View::Settings => c"A/C OFF".as_ptr(),
         };
         canvas_draw_str_aligned(canvas, AC_WIDTH / 2, 0, AlignCenter, AlignTop, title);
         canvas_set_font(canvas, FontSecondary);
 
-        for (index, field) in FIELDS.iter().enumerate() {
+        for (index, field) in ac.view.fields().iter().enumerate() {
             let y = 18 + index as i32 * 9;
 
             if *field == ac.field {
@@ -591,6 +591,7 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                 Some(picker) => ac.picker_label(picker).as_ptr(),
                 None => match (field, ac.flag(*field)) {
                     (_, Some(on)) => on_off(on),
+                    (Field::Timer, _) => ac.timer_label().as_ptr(),
                     (Field::Fan, _) => ac.fan_label().as_ptr(),
                     (Field::Temp, _) => {
                         owned = format!("{}C\0", ac.daikin.temp());
@@ -613,7 +614,7 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
             };
             // A picker row opens a submenu rather than changing in place, so
             // it says so.
-            let value_x = if picker.is_some() {
+            let value_x = if field.opens() {
                 canvas_draw_str_aligned(canvas, AC_WIDTH, y, AlignRight, AlignBottom, c">".as_ptr());
                 AC_WIDTH - 5
             } else {
