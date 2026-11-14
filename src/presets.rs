@@ -19,8 +19,8 @@ pub const NAME_LEN: usize = 9;
 /// The two that ship with the app. They can be edited like any other, and the
 /// last row puts them back.
 const BUILTIN: [(&[u8], u8, Mode, Fan); 2] = [
-    (b"Day", 23, Mode::Cool, Fan::Auto),
-    (b"Sleep", 25, Mode::Cool, Fan::Quiet),
+    (b"Day", 23 * 2, Mode::Cool, Fan::Auto),
+    (b"Sleep", 25 * 2, Mode::Cool, Fan::Quiet),
 ];
 
 /// A cap so the file stays a known size and the ring stays walkable by hand.
@@ -78,7 +78,7 @@ impl Presets {
         let mut ac = Daikin::default();
         ac.set_power(true);
         ac.set_mode(mode);
-        ac.set_temp(temp);
+        ac.set_temp_halves(temp);
         ac.set_fan(fan);
         if index == 1 {
             // Sleep: as quiet and as cheap as the unit will run.

@@ -28,8 +28,17 @@ const SECTION2_LEN: usize = 8;
 /// The 5 zero bits that open every message, sent bare (no header mark/space).
 const LEADER_BITS: usize = 5;
 
-pub const MIN_TEMP: u8 = 10;
-pub const MAX_TEMP: u8 = 32;
+/// The setpoint range, in half degrees (10–32°C). The ARC466A33 steps in 0.5°C
+/// and the byte holds exactly that, so half degrees are the unit throughout.
+pub const MIN_TEMP_HALVES: u8 = 20;
+pub const MAX_TEMP_HALVES: u8 = 64;
+
+/// What the remote puts in the temperature byte instead of a setpoint, in the
+/// two modes that have none (from captures of the ARC466A33, and the same as
+/// ESPHome's `daikin` component). Dry's is not a temperature at all — 0xC0
+/// would be 96°C — and Fan's reads as 25°C.
+const DRY_TEMP: u8 = 0xC0;
+const FAN_TEMP: u8 = 0x32;
 
 /// Minutes in a day. Both timers and the frame's clock are stored as minutes
 /// past midnight, so this is the modulus for all of it.
@@ -192,7 +201,7 @@ impl Default for Daikin {
         // powered on). Open on something sane instead.
         daikin.set_power(false);
         daikin.set_mode(Mode::Cool);
-        daikin.set_temp(23);
+        daikin.set_temp_halves(23 * 2);
         daikin.set_fan(Fan::Auto);
         daikin
     }
@@ -254,15 +263,30 @@ impl Daikin {
         Mode::from_bits((self.raw[21] >> 4) & 0b111)
     }
 
-    // -- Byte 22: temperature ---------------------------------------------
-
-    /// Stored at half-degree resolution; this remote only does whole degrees.
-    pub fn set_temp(&mut self, celsius: u8) {
-        self.raw[22] = celsius.clamp(MIN_TEMP, MAX_TEMP) * 2;
+    /// Dry and Fan don't regulate to a temperature, so the remote sends a
+    /// placeholder in place of the setpoint (see [`Daikin::wire`]).
+    pub fn has_setpoint(&self) -> bool {
+        !matches!(self.mode(), Mode::Dry | Mode::Fan)
     }
 
-    pub fn temp(&self) -> u8 {
-        self.raw[22] / 2
+    /// The remote has no Comfort airflow in Fan mode, and clears the bit there.
+    pub fn has_comfort(&self) -> bool {
+        self.mode() != Mode::Fan
+    }
+
+    // -- Byte 22: temperature ---------------------------------------------
+
+    /// In half degrees, which is how the byte stores it: 47 is 23.5°C.
+    ///
+    /// This is always the user's setpoint, even in Dry and Fan, where the frame
+    /// carries a placeholder instead — [`Daikin::wire`] swaps it in on the way
+    /// out, so the setpoint is still here when the mode changes back.
+    pub fn set_temp_halves(&mut self, halves: u8) {
+        self.raw[22] = halves.clamp(MIN_TEMP_HALVES, MAX_TEMP_HALVES);
+    }
+
+    pub fn temp_halves(&self) -> u8 {
+        self.raw[22]
     }
 
     // -- Bytes 24-25: fan and swing ---------------------------------------
@@ -338,15 +362,6 @@ impl Daikin {
 
     pub fn econo(&self) -> bool {
         self.bit(32, 2)
-    }
-
-    /// The bit is inverted: cleared means the weekly timer is enabled.
-    pub fn set_weekly_timer(&mut self, on: bool) {
-        self.set_bit(32, 7, !on);
-    }
-
-    pub fn weekly_timer(&self) -> bool {
-        !self.bit(32, 7)
     }
 
     /// Mould-proof / dry-out fan run after shutdown.
@@ -444,10 +459,48 @@ impl Daikin {
 
     // -- Raw access --------------------------------------------------------
 
-    /// The state as it sits on the wire, minus the checksums — those are
-    /// recomputed on every send, so they are not stored.
+    /// The stored state: what the user asked for, which is what gets saved.
+    /// Not quite the frame — see [`Daikin::wire`] — and without checksums,
+    /// which are recomputed on every send.
     pub fn raw(&self) -> &[u8; STATE_LEN] {
         &self.raw
+    }
+
+    /// The frame the ARC466A33 itself would send for this state, minus the
+    /// checksums.
+    ///
+    /// IRremoteESP8266's layout leaves a few bytes undocumented, and captures
+    /// of the real remote fill them in differently from its reset state. Those
+    /// differences are applied here rather than stored, so a preset saved by
+    /// an older build still goes out right, and so leaving Dry or Fan gets the
+    /// setpoint and Comfort back instead of whatever the placeholder was.
+    /// `self_check` pins every line of this against a capture.
+    pub fn wire(&self) -> [u8; STATE_LEN] {
+        let mut raw = self.raw;
+        let mode = self.mode();
+
+        match mode {
+            Mode::Dry => raw[22] = DRY_TEMP,
+            Mode::Fan => raw[22] = FAN_TEMP,
+            _ => {}
+        }
+        if !self.has_comfort() {
+            raw[6] &= !(1 << 4);
+        }
+
+        // Undocumented, and keyed to Dry: in every capture byte 5 is 0x10 and
+        // byte 32 carries 0x10 in Dry, and 0x20 / nothing in the other four.
+        let dry = mode == Mode::Dry;
+        raw[5] = if dry { 0x10 } else { 0x20 };
+        raw[32] = (raw[32] & !(1 << 4)) | if dry { 1 << 4 } else { 0 };
+
+        // Undocumented, and 0xC1 in every capture; the reset state has 0xC0.
+        raw[31] = 0xC1;
+        // The weekly timer's bit is inverted: set means off. The app has no
+        // weekly programme and never arms one, and the remote sends it set.
+        raw[32] |= 1 << 7;
+
+        raw
     }
 
     /// Adopt a state from outside. Rejects anything that doesn't carry the
@@ -466,7 +519,7 @@ impl Daikin {
 
     /// Fill in the three section checksums and put the whole state on the air.
     pub fn send(&self) {
-        let mut raw = self.raw;
+        let mut raw = self.wire();
         checksum(&mut raw);
         ir_press_button(&encode(&raw));
     }
@@ -530,10 +583,60 @@ fn push_footer(out: &mut Vec<u32>) {
     out.push(ZERO_SPACE + GAP);
 }
 
-/// Pins the byte layout and the checksums against a real ARC-series capture
-/// from IRremoteESP8266's test suite (`TestDecodeDaikin.RealExample`), which
-/// decodes to: on, cool, 29C, auto fan, powerful, clock 22:18, on timer 21:30,
-/// off timer 06:10.
+/// One frame captured from the ARC466A33 itself, and the state that produced
+/// it. All five were sent on a Saturday with Comfort on and nothing else set
+/// beyond what is listed.
+struct Capture {
+    mode: Mode,
+    /// For Dry this is whatever the setpoint happened to be; the frame carries
+    /// the placeholder instead, which is the point of including it.
+    temp_halves: u8,
+    fan: Fan,
+    clock: u16,
+    frame: [u8; STATE_LEN],
+}
+
+#[rustfmt::skip]
+const REMOTE_CAPTURES: [Capture; 5] = [
+    Capture { mode: Mode::Cool, temp_halves: 47, fan: Fan::Auto, clock: 23 * 60 + 47, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x93, 0x3D, 0x24, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x39, 0x2F, 0x00,
+        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0xC1,
+    ] },
+    Capture { mode: Mode::Heat, temp_halves: 52, fan: Fan::Auto, clock: 23 * 60 + 50, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x96, 0x3D, 0x27, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x49, 0x34, 0x00,
+        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0xD6,
+    ] },
+    Capture { mode: Mode::Auto, temp_halves: 50, fan: Fan::Auto, clock: 23 * 60 + 50, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x96, 0x3D, 0x27, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x09, 0x32, 0x00,
+        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0x94,
+    ] },
+    Capture { mode: Mode::Dry, temp_halves: 47, fan: Fan::Auto, clock: 21 * 60 + 53, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x10, 0x10, 0xF7, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x21, 0x3D, 0xB2, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x29, 0xC0, 0x00,
+        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x90, 0x00, 0x52,
+    ] },
+    // Comfort is still on in the state; the remote drops it in Fan mode.
+    Capture { mode: Mode::Fan, temp_halves: 47, fan: Fan::F1, clock: 23 * 60 + 46, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x00, 0xF7, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x92, 0x3D, 0x23, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x69, 0x32, 0x00,
+        0x30, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0x84,
+    ] },
+];
+
+/// Pins the frame construction against real captures, in two halves.
+///
+/// The layout and the checksums are checked against IRremoteESP8266's
+/// `TestDecodeDaikin.RealExample` (on, cool, 29C, auto fan, powerful, clock
+/// 22:18, on timer 21:30, off timer 06:10), which exercises the timers. That
+/// one is compared before [`Daikin::wire`], because it came from a different
+/// ARC remote.
+///
+/// Then [`Daikin::wire`] is checked against one frame per mode from the
+/// ARC466A33 itself, which is what pins the placeholders and the bytes
+/// IRremoteESP8266 doesn't document.
 ///
 /// Runs once, from `default()` — there is no test harness on the Flipper, and a
 /// wrong frame here is a silent no-op on the A/C rather than an obvious crash.
@@ -548,7 +651,7 @@ fn self_check() {
     let mut built = Daikin { raw: RESET_STATE };
     built.set_power(true);
     built.set_mode(Mode::Cool);
-    built.set_temp(29);
+    built.set_temp_halves(29 * 2);
     built.set_fan(Fan::Auto);
     built.set_swing_vertical(false);
     built.set_swing_horizontal(false);
@@ -564,14 +667,33 @@ fn self_check() {
     let captured = Daikin { raw: CAPTURED };
     assert!(captured.power(), "Daikin power");
     assert!(captured.mode() == Mode::Cool, "Daikin mode");
-    assert_eq!(captured.temp(), 29, "Daikin temp");
+    assert_eq!(captured.temp_halves(), 29 * 2, "Daikin temp");
     assert!(captured.fan() == Fan::Auto, "Daikin fan");
     assert!(captured.powerful(), "Daikin powerful");
     assert!(!captured.quiet(), "Daikin quiet");
-    assert!(captured.weekly_timer(), "Daikin weekly timer");
     assert!(captured.on_timer() && captured.off_timer(), "Daikin timer flags");
     assert_eq!(captured.on_time(), 21 * 60 + 30, "Daikin on time");
     assert_eq!(captured.off_time(), 6 * 60 + 10, "Daikin off time");
+
+    for capture in &REMOTE_CAPTURES {
+        let mut built = Daikin { raw: RESET_STATE };
+        built.set_power(true);
+        built.set_mode(capture.mode);
+        built.set_temp_halves(capture.temp_halves);
+        built.set_fan(capture.fan);
+        built.set_swing_vertical(false);
+        built.set_swing_horizontal(false);
+        built.set_comfort(true);
+        built.set_current_time(capture.clock);
+        // Saturday, in the remote's Sunday-is-1 count.
+        built.set_current_day(7);
+
+        let mut frame = built.wire();
+        checksum(&mut frame);
+        assert!(frame == capture.frame, "Daikin frame does not match the remote");
+        // The placeholder is the frame's, not the state's.
+        assert_eq!(built.temp_halves(), capture.temp_halves, "Daikin setpoint");
+    }
 
     assert_eq!(encode(&CAPTURED).len(), TIMINGS_LEN, "Daikin frame length");
 }

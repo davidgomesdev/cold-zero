@@ -4,7 +4,7 @@
 //! here sends the whole frame straight away, exactly like the physical remote
 //! does. See [`crate::daikin`] for the wire format.
 
-use crate::daikin::{self, Daikin, Fan, MAX_TEMP, MIN_TEMP, Mode};
+use crate::daikin::{self, Daikin, Fan, MAX_TEMP_HALVES, MIN_TEMP_HALVES, Mode};
 use crate::icons;
 use crate::presets::Presets;
 use core::ffi::CStr;
@@ -318,8 +318,9 @@ impl AcState {
                 }
                 InputKeyOk => type_ == InputTypeLong,
                 InputKeyLeft | InputKeyRight => {
-                    if self.field.opens() || self.field.acts() {
-                        // The row leads somewhere, or waits for OK.
+                    if self.field.opens() || self.field.acts() || self.inert(self.field) {
+                        // The row leads somewhere, waits for OK, or means
+                        // nothing in this mode.
                         false
                     } else if self.field == Field::Preset {
                         // Switching preset swaps the whole state, so it sends —
@@ -379,6 +380,11 @@ impl AcState {
         }
 
         if key != InputKeyLeft && key != InputKeyRight {
+            return;
+        }
+
+        // Not even a held run: it would end in a release that transmits.
+        if self.inert(self.field) {
             return;
         }
 
@@ -504,13 +510,14 @@ impl AcState {
             Field::Preset => {}
             // Wait for OK; `sends` and `navigate` both route arrows away.
             Field::PresetAction => {}
+            // Half a degree per press, as on the remote.
             Field::Temp => {
                 let temp = if forward {
-                    (ac.temp() + 1).min(MAX_TEMP)
+                    (ac.temp_halves() + 1).min(MAX_TEMP_HALVES)
                 } else {
-                    ac.temp().saturating_sub(1).max(MIN_TEMP)
+                    ac.temp_halves().saturating_sub(1).max(MIN_TEMP_HALVES)
                 };
-                ac.set_temp(temp);
+                ac.set_temp_halves(temp);
             }
             Field::Fan => {
                 let fan = if forward {
@@ -699,6 +706,18 @@ impl AcState {
             Fan::F3 => c"3",
             Fan::F4 => c"4",
             Fan::F5 => c"5",
+        }
+    }
+
+    /// Rows the current mode has no use for: Dry and Fan send a placeholder
+    /// instead of the setpoint, and Fan has no Comfort airflow. They show `-`
+    /// and ignore the arrows, rather than offering a change that the remote
+    /// would never send. Their values are kept, and come back with the mode.
+    pub fn inert(&self, field: Field) -> bool {
+        match field {
+            Field::Temp => !self.daikin.has_setpoint(),
+            Field::Comfort => !self.daikin.has_comfort(),
+            _ => false,
         }
     }
 

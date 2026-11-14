@@ -754,6 +754,7 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
             let value = match picker {
                 // A picker row shows whichever option is in effect.
                 Some(picker) => ac.picker_label(picker).as_ptr(),
+                None if ac.inert(*field) => c"-".as_ptr(),
                 None => match (field, ac.flag(*field)) {
                     (_, Some(on)) => on_off(on),
                     // Already NUL-terminated where it is stored, so it goes
@@ -762,7 +763,12 @@ unsafe fn draw_ac(canvas: *mut Canvas, app_state: &AppState) {
                     (Field::Timer, _) => ac.timer_label().as_ptr(),
                     (Field::Fan, _) => ac.fan_label().as_ptr(),
                     (Field::Temp, _) => {
-                        owned = format!("{}C\0", ac.daikin.temp());
+                        let halves = ac.daikin.temp_halves();
+                        owned = if halves % 2 == 0 {
+                            format!("{}C\0", halves / 2)
+                        } else {
+                            format!("{}.5C\0", halves / 2)
+                        };
                         owned.as_ptr()
                     }
                     _ => c"".as_ptr(),

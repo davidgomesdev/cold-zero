@@ -21,7 +21,9 @@ make install
 
 No tests — `test = false` in Cargo.toml. No linting config beyond `cargo check`.
 
-`daikin::self_check` stands in for the missing harness: it runs once from `Daikin::default()` and rebuilds a real ARC-remote capture (IRremoteESP8266's `TestDecodeDaikin.RealExample`) through the setters, reads it back through the getters, and checks the frame length. A layout or checksum mistake panics the app on launch instead of silently transmitting a frame the A/C ignores.
+`daikin::self_check` stands in for the missing harness: it runs once from `Daikin::default()`. It rebuilds a real ARC-remote capture (IRremoteESP8266's `TestDecodeDaikin.RealExample`) through the setters, reads it back through the getters, and checks the frame length. It then rebuilds one frame per mode captured from the ARC466A33 itself (`REMOTE_CAPTURES`) through `Daikin::wire`. A layout, checksum or per-mode mistake panics the app on launch instead of silently transmitting a frame the A/C ignores.
+
+`daikin.rs` builds for the host too, which is the quickest way to run that check: a scratch binary with `#[path = ".../src/daikin.rs"] mod daikin;`, a stub `mod ir { pub fn ir_press_button(_: &[u32]) {} }` and a `ufmt` dependency, whose `main` calls `Daikin::default()`.
 
 ## Architecture
 
@@ -48,7 +50,7 @@ Inside a device, keys are dispatched per screen:
 
 | Device | OK | Up / Down | Left / Right |
 |---|---|---|---|
-| A/C | short: power, or the focused row's action — open it if it leads somewhere, name a preset on `Create...` · long: power on and resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting, switch preset, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
+| A/C | short: power, or the focused row's action — open it if it leads somewhere, name a preset on `Create...` · long: power on and resend state (both send all 35 bytes) · in a picker: pick | move the cursor down the settings list (repeats while held), or through a picker | change the selected setting (Temp in 0.5°C steps; nothing on a row the mode has no use for), switch preset, or open the picker on a picker row · hold to run through Temp, Fan and the timers |
 | Heater | short: on (Eco, 23°C) · long: daytime (HeatHigh, 35°C) · either when on: off | — | — |
 | Fan | short: on · long: on + 1h timer + light off · either when on: off | Up short: speed · Up long: timer · Down short: rotation · Down long: mode | — |
 | Bulbs | drives the pair on, or off when both are already on | toggle escritório / quarto | — |
@@ -101,6 +103,16 @@ OK on `Create...` asks for a name on the firmware's keyboard. That is a `View`, 
 The heater and fan remotes send one frame per button, so their timings are captured. The Daikin is the opposite — it is stateful, and every press retransmits all 35 bytes — so `daikin` builds frames instead of replaying them, ported from IRremoteESP8266's `DAIKIN` protocol (`ir_Daikin.h` lists ARC466A33 under it, not under DAIKIN2/312).
 
 A frame is 583 timings: five bare zero bits, then three header-wrapped sections of 8, 8 and 19 bytes, each ending in its own checksum byte and a 29.4ms gap. Bytes go out LSB-first.
+
+What is stored and what goes on the air are not quite the same bytes. The stored state (`Daikin::raw`, and what `presets.bin` holds) is what the user asked for. `Daikin::wire` turns it into what the ARC466A33 actually sends, and the differences all came from captures of that remote:
+
+- **Dry and Fan have no setpoint.** The temperature byte carries a placeholder instead — `0xC0` in Dry, `0x32` in Fan (the same values ESPHome's `daikin` uses). A real setpoint in Dry is a combination the remote never sends; before this, the app sent one and the room cooled noticeably. The setpoint stays in the stored state, so it comes back when the mode changes.
+- **Fan has no Comfort.** The remote clears the bit there; the stored flag survives the same way.
+- **Undocumented bytes.** Byte 5 is `0x10` in Dry and `0x20` in every other mode, byte 32 bit 4 is set only in Dry, and byte 31 is always `0xC1`. IRremoteESP8266 names none of them, and its reset state has `0x00`/`0xC0`. The weekly-timer bit (byte 32 bit 7, set = off) is always set too, since the app has no weekly programme.
+
+Doing this at send time rather than in the setters is what lets presets saved by an older build go out right without a file migration. The Temp row shows `-` in Dry and Fan, and the Comfort row in Fan (`AcState::inert`). Their arrows do nothing and transmit nothing, held runs included, because the remote would never send the change.
+
+Temperatures are half degrees throughout (`set_temp_halves`; 47 is 23.5°C), because the ARC466A33 steps in 0.5°C and the byte holds exactly that. Auto is treated as having a real setpoint. Its capture read `0x32` (25°C), but that may have been the remote's setting at the time, so capturing Auto at another temperature would settle whether it is a placeholder too.
 
 Every edit on the screen sends the whole state immediately, exactly as the physical remote does. Each send stamps the frame with the Flipper's clock (`AcState::send`), because the A/C's own timers run off it — note Furi counts Monday as 1 and the remote counts Sunday as 1.
 
