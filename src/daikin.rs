@@ -370,13 +370,17 @@ impl Daikin {
         self.bit(32, 2)
     }
 
-    /// Mould-proof / dry-out fan run after shutdown.
+    /// Mould-proof / dry-out fan run after shutdown ("Clean" on the screen).
+    ///
+    /// IRremoteESP8266 puts this at byte 33 bit 1, but the ARC466A33 never sets
+    /// that bit: captures of it with and without Clean differ only in byte 32
+    /// bit 4, which IRremoteESP8266 leaves unnamed.
     pub fn set_mold(&mut self, on: bool) {
-        self.set_bit(33, 1, on);
+        self.set_bit(32, 4, on);
     }
 
     pub fn mold(&self) -> bool {
-        self.bit(33, 1)
+        self.bit(32, 4)
     }
 
     // -- Byte 6: comfort ---------------------------------------------------
@@ -498,12 +502,12 @@ impl Daikin {
             raw[6] &= !(1 << 4);
         }
 
-        // Undocumented, and keyed to Dry: in every capture byte 5 is 0x10 and
-        // byte 32 carries 0x10 in Dry, and 0x20 / nothing in the other four.
-        let dry = mode == Mode::Dry;
-        raw[5] = if dry { 0x10 } else { 0x20 };
-        raw[32] = (raw[32] & !(1 << 4)) | if dry { 1 << 4 } else { 0 };
-
+        // Undocumented, and 0x20 in every capture but one, where it was 0x10.
+        // That one (Dry, with Clean, a couple of hours before the others)
+        // matched a later Dry + Clean capture in everything else, so whatever
+        // the byte says, it is neither the mode nor Clean. The reset state has
+        // 0x00.
+        raw[5] = 0x20;
         // Undocumented, and 0xC1 in every capture; the reset state has 0xC0.
         raw[31] = 0xC1;
         // The weekly timer's bit is inverted: set means off. The app has no
@@ -522,7 +526,15 @@ impl Daikin {
                 return None;
             }
         }
-        Some(Daikin { raw })
+        let mut daikin = Daikin { raw };
+        // Builds before Clean moved to byte 32 bit 4 stored it at byte 33 bit 1
+        // (IRremoteESP8266's place for it). Carry the choice over, so a saved
+        // preset doesn't silently lose Clean, or send a bit the remote doesn't.
+        if daikin.bit(33, 1) {
+            daikin.set_bit(33, 1, false);
+            daikin.set_mold(true);
+        }
+        Some(daikin)
     }
 
     // -- Sending -----------------------------------------------------------
@@ -594,47 +606,55 @@ fn push_footer(out: &mut Vec<u32>) {
 }
 
 /// One frame captured from the ARC466A33 itself, and the state that produced
-/// it. All five were sent on a Saturday with Comfort on and nothing else set
-/// beyond what is listed.
+/// it. All were sent with Comfort on and nothing else set beyond what is
+/// listed.
 struct Capture {
     mode: Mode,
     /// For Dry this is whatever the setpoint happened to be; the frame carries
     /// the placeholder instead, which is the point of including it.
     temp_halves: u8,
     fan: Fan,
+    clean: bool,
+    /// In the remote's count, Sunday is 1.
+    day: u8,
     clock: u16,
     frame: [u8; STATE_LEN],
 }
 
 #[rustfmt::skip]
-const REMOTE_CAPTURES: [Capture; 5] = [
-    Capture { mode: Mode::Cool, temp_halves: 47, fan: Fan::Auto, clock: 23 * 60 + 47, frame: [
+const REMOTE_CAPTURES: [Capture; 6] = [
+    Capture { mode: Mode::Cool, temp_halves: 47, fan: Fan::Auto, clean: false, day: 7, clock: 23 * 60 + 47, frame: [
         0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
         0x42, 0x93, 0x3D, 0x24, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x39, 0x2F, 0x00,
         0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0xC1,
     ] },
-    Capture { mode: Mode::Heat, temp_halves: 52, fan: Fan::Auto, clock: 23 * 60 + 50, frame: [
+    Capture { mode: Mode::Heat, temp_halves: 52, fan: Fan::Auto, clean: false, day: 7, clock: 23 * 60 + 50, frame: [
         0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
         0x42, 0x96, 0x3D, 0x27, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x49, 0x34, 0x00,
         0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0xD6,
     ] },
-    Capture { mode: Mode::Auto, temp_halves: 50, fan: Fan::Auto, clock: 23 * 60 + 50, frame: [
+    Capture { mode: Mode::Auto, temp_halves: 50, fan: Fan::Auto, clean: false, day: 7, clock: 23 * 60 + 50, frame: [
         0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
         0x42, 0x96, 0x3D, 0x27, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x09, 0x32, 0x00,
         0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0x94,
     ] },
-    // The remote sent auto fan, and won't do otherwise in Dry; F3 is here to
-    // show the stored speed being overridden.
-    Capture { mode: Mode::Dry, temp_halves: 47, fan: Fan::F3, clock: 21 * 60 + 53, frame: [
-        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x10, 0x10, 0xF7, 0x11, 0xDA, 0x27, 0x00,
-        0x42, 0x21, 0x3D, 0xB2, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x29, 0xC0, 0x00,
-        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x90, 0x00, 0x52,
-    ] },
     // Comfort is still on in the state; the remote drops it in Fan mode.
-    Capture { mode: Mode::Fan, temp_halves: 47, fan: Fan::F1, clock: 23 * 60 + 46, frame: [
+    Capture { mode: Mode::Fan, temp_halves: 47, fan: Fan::F1, clean: false, day: 7, clock: 23 * 60 + 46, frame: [
         0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x00, 0xF7, 0x11, 0xDA, 0x27, 0x00,
         0x42, 0x92, 0x3D, 0x23, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x69, 0x32, 0x00,
         0x30, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0x84,
+    ] },
+    // The remote sent auto fan, and won't do otherwise in Dry; F3 is here to
+    // show the stored speed being overridden.
+    Capture { mode: Mode::Dry, temp_halves: 47, fan: Fan::F3, clean: true, day: 1, clock: 4, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x04, 0x08, 0x60, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x29, 0xC0, 0x00,
+        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x90, 0x00, 0x52,
+    ] },
+    Capture { mode: Mode::Cool, temp_halves: 47, fan: Fan::Auto, clean: true, day: 1, clock: 6, frame: [
+        0x11, 0xDA, 0x27, 0x00, 0xC5, 0x20, 0x10, 0x07, 0x11, 0xDA, 0x27, 0x00,
+        0x42, 0x06, 0x08, 0x62, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x39, 0x2F, 0x00,
+        0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x90, 0x00, 0xD1,
     ] },
 ];
 
@@ -647,8 +667,8 @@ const REMOTE_CAPTURES: [Capture; 5] = [
 /// ARC remote.
 ///
 /// Then [`Daikin::wire`] is checked against one frame per mode from the
-/// ARC466A33 itself, which is what pins the placeholders and the bytes
-/// IRremoteESP8266 doesn't document.
+/// ARC466A33 itself, plus Clean in two of them, which is what pins the
+/// placeholders and the bytes IRremoteESP8266 doesn't document.
 ///
 /// Runs once, from `default()` — there is no test harness on the Flipper, and a
 /// wrong frame here is a silent no-op on the A/C rather than an obvious crash.
@@ -696,9 +716,9 @@ fn self_check() {
         built.set_swing_vertical(false);
         built.set_swing_horizontal(false);
         built.set_comfort(true);
+        built.set_mold(capture.clean);
         built.set_current_time(capture.clock);
-        // Saturday, in the remote's Sunday-is-1 count.
-        built.set_current_day(7);
+        built.set_current_day(capture.day);
 
         let mut frame = built.wire();
         checksum(&mut frame);

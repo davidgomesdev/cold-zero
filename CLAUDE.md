@@ -108,8 +108,9 @@ What is stored and what goes on the air are not quite the same bytes. The stored
 
 - **Dry and Fan have no setpoint.** The temperature byte carries a placeholder instead — `0xC0` in Dry, `0x32` in Fan (the same values ESPHome's `daikin` uses). A real setpoint in Dry is a combination the remote never sends; before this, the app sent one and the room cooled noticeably. The setpoint stays in the stored state, so it comes back when the mode changes.
 - **Dry has no fan speed.** The remote sends auto there and won't change it; the stored speed survives the same way.
+- **Clean is byte 32 bit 4**, not byte 33 bit 1 where IRremoteESP8266 puts Mould — Cool with and without Clean differ in that bit alone. That one is a setter (`set_mold`), not a `wire` rewrite, since nothing about it depends on the mode; `from_raw` moves a Clean saved at the old bit by an earlier build.
 - **Fan has no Comfort.** The remote clears the bit there; the stored flag survives the same way.
-- **Undocumented bytes.** Byte 5 is `0x10` in Dry and `0x20` in every other mode, byte 32 bit 4 is set only in Dry, and byte 31 is always `0xC1`. IRremoteESP8266 names none of them, and its reset state has `0x00`/`0xC0`. The weekly-timer bit (byte 32 bit 7, set = off) is always set too, since the app has no weekly programme.
+- **Undocumented bytes.** Byte 5 is `0x20` and byte 31 is `0xC1` in every capture (IRremoteESP8266's reset state has `0x00`/`0xC0` and names neither). One early Dry capture had byte 5 at `0x10`, unexplained: a later one with the same settings had `0x20`. The weekly-timer bit (byte 32 bit 7, set = off) is always set too, since the app has no weekly programme.
 
 Doing this at send time rather than in the setters is what lets presets saved by an older build go out right without a file migration. The Temp row shows `-` in Dry and Fan, the Fan row in Dry, and the Comfort row in Fan (`AcState::inert`). Their arrows do nothing and transmit nothing, held runs included, because the remote would never send the change.
 
