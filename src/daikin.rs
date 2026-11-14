@@ -269,6 +269,12 @@ impl Daikin {
         !matches!(self.mode(), Mode::Dry | Mode::Fan)
     }
 
+    /// Dry picks its own fan speed: the remote sends auto there and won't
+    /// change it.
+    pub fn has_fan_speed(&self) -> bool {
+        self.mode() != Mode::Dry
+    }
+
     /// The remote has no Comfort airflow in Fan mode, and clears the bit there.
     pub fn has_comfort(&self) -> bool {
         self.mode() != Mode::Fan
@@ -473,7 +479,8 @@ impl Daikin {
     /// of the real remote fill them in differently from its reset state. Those
     /// differences are applied here rather than stored, so a preset saved by
     /// an older build still goes out right, and so leaving Dry or Fan gets the
-    /// setpoint and Comfort back instead of whatever the placeholder was.
+    /// setpoint, fan speed and Comfort back instead of whatever the remote
+    /// substituted.
     /// `self_check` pins every line of this against a capture.
     pub fn wire(&self) -> [u8; STATE_LEN] {
         let mut raw = self.raw;
@@ -483,6 +490,9 @@ impl Daikin {
             Mode::Dry => raw[22] = DRY_TEMP,
             Mode::Fan => raw[22] = FAN_TEMP,
             _ => {}
+        }
+        if !self.has_fan_speed() {
+            raw[24] = (raw[24] & 0x0F) | (Fan::Auto.to_bits() << 4);
         }
         if !self.has_comfort() {
             raw[6] &= !(1 << 4);
@@ -613,7 +623,9 @@ const REMOTE_CAPTURES: [Capture; 5] = [
         0x42, 0x96, 0x3D, 0x27, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x09, 0x32, 0x00,
         0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x80, 0x00, 0x94,
     ] },
-    Capture { mode: Mode::Dry, temp_halves: 47, fan: Fan::Auto, clock: 21 * 60 + 53, frame: [
+    // The remote sent auto fan, and won't do otherwise in Dry; F3 is here to
+    // show the stored speed being overridden.
+    Capture { mode: Mode::Dry, temp_halves: 47, fan: Fan::F3, clock: 21 * 60 + 53, frame: [
         0x11, 0xDA, 0x27, 0x00, 0xC5, 0x10, 0x10, 0xF7, 0x11, 0xDA, 0x27, 0x00,
         0x42, 0x21, 0x3D, 0xB2, 0x11, 0xDA, 0x27, 0x00, 0x00, 0x29, 0xC0, 0x00,
         0xA0, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0xC1, 0x90, 0x00, 0x52,

@@ -107,10 +107,13 @@ A frame is 583 timings: five bare zero bits, then three header-wrapped sections 
 What is stored and what goes on the air are not quite the same bytes. The stored state (`Daikin::raw`, and what `presets.bin` holds) is what the user asked for. `Daikin::wire` turns it into what the ARC466A33 actually sends, and the differences all came from captures of that remote:
 
 - **Dry and Fan have no setpoint.** The temperature byte carries a placeholder instead — `0xC0` in Dry, `0x32` in Fan (the same values ESPHome's `daikin` uses). A real setpoint in Dry is a combination the remote never sends; before this, the app sent one and the room cooled noticeably. The setpoint stays in the stored state, so it comes back when the mode changes.
+- **Dry has no fan speed.** The remote sends auto there and won't change it; the stored speed survives the same way.
 - **Fan has no Comfort.** The remote clears the bit there; the stored flag survives the same way.
 - **Undocumented bytes.** Byte 5 is `0x10` in Dry and `0x20` in every other mode, byte 32 bit 4 is set only in Dry, and byte 31 is always `0xC1`. IRremoteESP8266 names none of them, and its reset state has `0x00`/`0xC0`. The weekly-timer bit (byte 32 bit 7, set = off) is always set too, since the app has no weekly programme.
 
-Doing this at send time rather than in the setters is what lets presets saved by an older build go out right without a file migration. The Temp row shows `-` in Dry and Fan, and the Comfort row in Fan (`AcState::inert`). Their arrows do nothing and transmit nothing, held runs included, because the remote would never send the change.
+Doing this at send time rather than in the setters is what lets presets saved by an older build go out right without a file migration. The Temp row shows `-` in Dry and Fan, the Fan row in Dry, and the Comfort row in Fan (`AcState::inert`). Their arrows do nothing and transmit nothing, held runs included, because the remote would never send the change.
+
+There is one setpoint, shared by every mode. The physical remote keeps a separate one for Cool and for Heat; that is deliberately not mirrored here.
 
 Temperatures are half degrees throughout (`set_temp_halves`; 47 is 23.5°C), because the ARC466A33 steps in 0.5°C and the byte holds exactly that. Auto is treated as having a real setpoint. Its capture read `0x32` (25°C), but that may have been the remote's setting at the time, so capturing Auto at another temperature would settle whether it is a placeholder too.
 

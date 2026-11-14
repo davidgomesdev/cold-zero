@@ -710,12 +710,14 @@ impl AcState {
     }
 
     /// Rows the current mode has no use for: Dry and Fan send a placeholder
-    /// instead of the setpoint, and Fan has no Comfort airflow. They show `-`
+    /// instead of the setpoint, Dry always runs the fan on auto, and Fan has
+    /// no Comfort airflow. They show `-`
     /// and ignore the arrows, rather than offering a change that the remote
     /// would never send. Their values are kept, and come back with the mode.
     pub fn inert(&self, field: Field) -> bool {
         match field {
             Field::Temp => !self.daikin.has_setpoint(),
+            Field::Fan => !self.daikin.has_fan_speed(),
             Field::Comfort => !self.daikin.has_comfort(),
             _ => false,
         }
